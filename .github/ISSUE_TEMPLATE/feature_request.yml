@@ -1,0 +1,21 @@
+name: Feature request or port
+description: An idea for the pet, or a port to another distro / compositor / terminal
+labels: [enhancement]
+body:
+  - type: textarea
+    id: idea
+    attributes:
+      label: The idea
+      description: What should the pet do? If you're porting, which distro / compositor / terminal?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why it would be fun or useful
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to work on this myself

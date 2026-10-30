@@ -1,0 +1,16 @@
+# runtime state never lives in the repo (it is in ~/.local/state/desktop-pet)
+state.json*
+memory.json
+status.json
+dock-*.json
+dock.lock
+nwg-dock-pinned.orig
+*.bak.desktop-pet.*
+__pycache__/
+*.pyc
+*.ppm
+# stray screenshots / recordings outside docs/
+/*.png
+/*.gif
+/*.mp4
+/screenshots/

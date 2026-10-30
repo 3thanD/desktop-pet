@@ -1,0 +1,1212 @@
+#!/usr/bin/env -S python3 -I
+"""desktop-pet: control the Omarchy desktop pet plugin (3thand.desktop-pet)."""
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+
+HOME = os.path.expanduser("~")
+PLUGIN_ID = "3thand.desktop-pet"
+# The repo / plugin checkout this script lives in (works from the clone and via the ~/.local/bin link).
+REPO_DIR = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+PLUGIN_DIR = os.path.join(HOME, ".config/omarchy/plugins", PLUGIN_ID)
+HELPER = os.path.join(REPO_DIR, "scripts", "helper.py")
+CONFIG = os.path.join(HOME, ".config/desktop-pet/config.json")
+STATE_DIR = os.path.join(HOME, ".local/state/desktop-pet")
+STATE = os.path.join(STATE_DIR, "state.json")
+MEMORY = os.path.join(STATE_DIR, "memory.json")
+SHELL_JSON = os.path.join(HOME, ".config/omarchy/shell.json")
+COLORS = os.path.join(HOME, ".local/state/omarchy/current/theme/colors.toml")
+THEME_NAME = os.path.join(HOME, ".local/state/omarchy/current/theme.name")
+
+PETS = ["slime", "cat", "dragon", "goblin"]
+PET_DESC = {
+    "slime": "a cute, bubbly slime",
+    "cat": "an aloof little cat",
+    "dragon": "a baby dragon (breathes fire: text turns red)",
+    "goblin": "a goblin that borrows your dock icons",
+}
+STAGES = ["", "baby", "teen", "adult", "elder"]
+ACCESSORIES = ["shades", "visor", "retroshades", "glow", "crown", "leafhat", "pumpkin", "beanie",
+               "mushroom", "halo", "flower", "bow", "moonstars", "scarf", "headband", "tie", "gem"]
+THEME_ACC = {
+    "hackerman": "shades+glow", "tokyo-night": "visor", "everforest": "leafhat", "nord": "scarf+snow",
+    "catppuccin": "crown", "catppuccin-latte": "crown", "rose-pine": "moonstars", "gruvbox": "pumpkin",
+    "matte-black": "bow (monochrome)", "vantablack": "bow (monochrome)", "white": "bow (monochrome)",
+    "kanagawa": "headband", "last-horizon": "headband", "lumon": "tie", "lupine": "flower",
+    "miasma": "mushroom", "osaka-jade": "gem", "retro-82": "retroshades", "ristretto": "beanie",
+    "solitude": "moonstars", "aether": "halo", "ethereal": "halo", "flexoki-light": "flower",
+}
+CHATTY = ["off", "low", "normal", "high"]
+DEFAULTS = {
+    "pet": "slime", "names": {}, "accessory": "auto", "eat": True, "goblinSteal": True,
+    "chatty": "low", "brain": True, "brainContext": False, "persona": {}, "themePets": {},
+    "size": 100, "color": "theme", "fetch": True, "buddy": True,
+}
+
+# ------------------------------------------------------------------ colors
+
+USE_COLOR = sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+
+
+def theme_colors():
+    c = {}
+    try:
+        for line in open(COLORS):
+            m = re.match(r'\s*([A-Za-z0-9_\-]+)\s*=\s*"(#[0-9a-fA-F]{6})', line)
+            if m:
+                c[m.group(1)] = m.group(2)
+    except Exception:
+        pass
+    return c
+
+
+TC = theme_colors()
+
+
+def rgb(hexstr):
+    h = hexstr.lstrip("#")
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def fg(hexstr, text, bold=False):
+    if not USE_COLOR or not hexstr:
+        return text
+    r, g, b = rgb(hexstr)
+    return "\x1b[%s38;2;%d;%d;%dm%s\x1b[0m" % ("1;" if bold else "", r, g, b, text)
+
+
+def bg(hexstr, text):
+    if not USE_COLOR or not hexstr:
+        return text
+    r, g, b = rgb(hexstr)
+    return "\x1b[48;2;%d;%d;%dm%s\x1b[0m" % (r, g, b, text)
+
+
+ACCENT = TC.get("accent", "#7aa2f7")
+DIM = TC.get("dark_foreground") or TC.get("muted") or "#777777"
+
+
+def acc(t, bold=True):
+    return fg(ACCENT, t, bold)
+
+
+def dim(t):
+    return fg(DIM, t)
+
+
+def err(msg):
+    sys.stderr.write(fg(TC.get("red", "#e05561"), "desktop-pet: ", True) + msg + "\n")
+
+
+# ------------------------------------------------------------------ files
+
+def load_config():
+    cfg = dict(DEFAULTS)
+    try:
+        with open(CONFIG) as f:
+            user = json.load(f)
+        if isinstance(user, dict):
+            cfg.update(user)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        err("config file is not valid JSON (%s); using defaults" % e)
+    for k in ("names", "persona", "themePets"):
+        if not isinstance(cfg.get(k), dict):
+            cfg[k] = {}
+    return cfg
+
+
+def save_config(cfg):
+    os.makedirs(os.path.dirname(CONFIG), exist_ok=True)
+    tmp = CONFIG + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(cfg, f, indent=1)
+        f.write("\n")
+    os.replace(tmp, CONFIG)
+    if is_on():
+        ipc("reload")
+
+
+def load_doc():
+    """The pet's saved state (v2: one record per species). Never raises."""
+    for path in (STATE, STATE + ".bak"):
+        try:
+            with open(path) as f:
+                d = json.load(f)
+            if isinstance(d, dict):
+                return d
+        except Exception:
+            continue
+    return {}
+
+
+def save_doc(d):
+    os.makedirs(STATE_DIR, exist_ok=True)
+    tmp = STATE + ".tmp-cli"
+    with open(tmp, "w") as f:
+        json.dump(d, f, indent=1)
+    os.replace(tmp, STATE)
+
+
+def load_state(pet=None):
+    """Flat view of one pet's stats (for status when the pet is off)."""
+    d = load_doc()
+    pet = pet or load_config()["pet"]
+    if d.get("version") == 2:
+        r = dict((d.get("pets") or {}).get(pet) or {})
+        r["pet"] = pet
+        if not (d.get("pets") or {}).get(pet):
+            r["egg"] = True
+        if r.get("hatchedAt"):
+            r["ageDays"] = int((time.time() * 1000 - r["hatchedAt"]) / 86400000)
+        st = r.get("stage", 1)
+        r["stageName"] = STAGES[st] + (" (%s)" % r.get("variant") if st == 3 and r.get("variant", "classic") != "classic" else "")
+        return r
+    return d   # old flat format
+
+
+def pet_label(cfg, pet):
+    return cfg["names"].get(pet) or ("your " + pet)
+
+
+def theme_slug():
+    try:
+        return open(THEME_NAME).read().strip().lower().replace(" ", "-")
+    except Exception:
+        return ""
+
+
+# ------------------------------------------------------------------ shell / plugin
+
+def run(cmd, timeout=15):
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+        return r.returncode, r.stdout.strip()
+    except Exception as e:
+        return 1, str(e)
+
+
+# ================================================================== host integration
+# Everything that depends on the Omarchy shell lives in this block: how the pet
+# is switched on/off and how the CLI reaches the running pet (Quickshell IPC
+# target "desktoppet"). Settings themselves go through config.json, which the
+# pet watches, so they work without any of this. A future standalone mode only
+# needs to replace these three functions.
+
+def host_is_enabled():
+    """Is the plugin enabled in the Omarchy shell? (third-party plugin ids are
+    listed in ~/.config/omarchy/shell.json when enabled)"""
+    try:
+        with open(SHELL_JSON) as f:
+            return PLUGIN_ID in json.dumps(json.load(f).get("plugins", []))
+    except Exception:
+        return ipc("ping") == "ok"   # fallback: the pet answers, so it runs
+
+
+def host_set_enabled(on):
+    """Enable/disable the plugin. Returns (ok, message)."""
+    if on:
+        run(["omarchy-shell", "shell", "rescanPlugins"])
+        time.sleep(1)
+    code, out = run(["omarchy", "plugin", "enable" if on else "disable", PLUGIN_ID])
+    if code == 0:
+        return True, out
+    # fallback: talk to the shell directly
+    code, out2 = run(["omarchy-shell", "shell", "setPluginEnabled", PLUGIN_ID, "true" if on else "false"])
+    return code == 0, out or out2
+
+
+def ipc(method, *args):
+    """Call the running pet. Returns its reply or None."""
+    cands = []
+    if os.environ.get("DESKTOP_PET_QS_CONFIG"):   # a pet running in its own Quickshell instance
+        cands.append(["quickshell", "ipc", "-p", os.environ["DESKTOP_PET_QS_CONFIG"], "call", "desktoppet", method, *args])
+    for cmd in cands + [["omarchy-shell", "desktoppet", method, *args],
+                ["quickshell", "ipc", "-p", os.path.join(os.environ.get("OMARCHY_PATH", "/usr/share/omarchy"), "shell"),
+                 "call", "desktoppet", method, *args]]:
+        code, out = run(cmd, timeout=10)
+        if code == 0:
+            return out
+    return None
+
+
+is_on = host_is_enabled
+# ==================================================================
+
+
+def helper(*args, timeout=40):
+    code, out = run(["python3", "-I", HELPER, *args], timeout=timeout)
+    try:
+        return json.loads(out.splitlines()[-1]) if out else {}
+    except Exception:
+        return {}
+
+
+def live_status():
+    if not is_on():
+        return None
+    out = ipc("status")
+    try:
+        return json.loads(out) if out else None
+    except Exception:
+        return None
+
+
+# ------------------------------------------------------------------ previews
+
+PREVIEW = {
+    "slime": ["  .oooo.  ", " obbbbbbo ", "obebbbbebo", "obbbmmbbbo", " oooooooo "],
+    "cat":   [" o      o ", " obooooobo", " obebbbebo", " obbbmbbbo", "  oo  oo  "],
+    "dragon": [" y      y ", " obbbbbbo ", "WobebbebbW", "WWoyyyyoWW", "  oo  oo  "],
+    "goblin": ["   occo   ", "oobbbbbboo", " obybbybo ", "  occcco  ", "  oo  oo  "],
+}
+
+
+def pet_colors(pet):
+    a = TC.get("accent", "#7aa2f7")
+    fgc = TC.get("foreground", "#dddddd")
+    green = TC.get("green", "#8cc570")
+    body = {"slime": a, "cat": fgc, "dragon": green, "goblin": TC.get("bright_green", green)}[pet]
+    return {"b": body, "o": "#333344", "e": "#101018", "m": "#552233", "y": TC.get("yellow", "#e5c07b"),
+            "W": TC.get("cyan", "#56b6c2"), "c": TC.get("brown", "#8a5a2b")}
+
+
+def preview(pet):
+    cols = pet_colors(pet)
+    rows = []
+    for line in PREVIEW[pet]:
+        s = ""
+        for ch in line:
+            if ch == " " or not USE_COLOR:
+                s += "  " if USE_COLOR else ("  " if ch == " " else "██")
+            else:
+                s += bg(cols.get(ch, cols["b"]), "  ")
+        rows.append(s)
+    return rows
+
+
+# ------------------------------------------------------------------ commands
+
+def bar(value, color, width=20):
+    v = max(0, min(100, int(round(value or 0))))
+    full = int(round(v / 100 * width))
+    if USE_COLOR:
+        return fg(color, "█" * full) + fg(DIM, "░" * (width - full)) + " %3d" % v
+    return "#" * full + "." * (width - full) + " %3d" % v
+
+
+def cmd_status(_args):
+    cfg = load_config()
+    on = is_on()
+    st = live_status() or load_state()
+    pet = st.get("pet") or cfg["pet"]
+    name = pet_label(cfg, pet)
+    onoff = fg(TC.get("green", "#8cc570"), "on", True) if on else fg(TC.get("red", "#e05561"), "off", True)
+    if st.get("egg"):
+        print(acc("an egg") + dim(" (a %s is about to hatch)   ·   " % pet) + onoff)
+        print(dim("  try: ") + "desktop-pet name <name>" + dim(" · ") + "help")
+        return 0
+    age = st.get("ageDays")
+    print(acc(name) + dim("  the ") + (str(st.get("stageName", "")) + " " if st.get("stageName") else "") + pet
+          + (dim(", %s day%s old" % (age, "" if age == 1 else "s")) if age is not None else "")
+          + dim("   ·   ") + onoff
+          + (dim("   mood: ") + str(st.get("mood")) if on and st.get("mood") else ""))
+    print("  hunger    " + bar(st.get("hunger", 80), TC.get("yellow", ACCENT)))
+    print("  happiness " + bar(st.get("happiness", 80), TC.get("magenta", ACCENT)))
+    print("  energy    " + bar(st.get("energy", 80), TC.get("cyan", ACCENT)))
+    a = cfg["accessory"]
+    slug = theme_slug()
+    acc_txt = ("auto → " + THEME_ACC.get(slug, "bow")) if a == "auto" else a
+    print(dim("  accessory ") + acc_txt + dim("   theme ") + (slug or "?"))
+    flags = []
+    if not cfg["eat"]:
+        flags.append("eating text off")
+    if pet == "goblin" and not cfg["goblinSteal"]:
+        flags.append("dock stealing off")
+    flags.append("brain " + ("on" if cfg["brain"] else "off") + ", chatty " + cfg["chatty"])
+    if st.get("meals") is not None:
+        flags.append("%s meals, %s care days" % (st.get("meals", 0), st.get("careDays", 0)))
+    print(dim("  " + "  ·  ".join(flags)))
+    print(dim("  try: ") + "desktop-pet pick cat" + dim(" · ") + "feed" + dim(" · ") + "say \"hi\"" + dim(" · ")
+          + "off" + dim(" · ") + "help")
+    return 0
+
+
+def cmd_on(_args):
+    if is_on():
+        print(acc("●") + " already on")
+        return 0
+    if not os.path.isfile(os.path.join(PLUGIN_DIR, "manifest.json")):
+        err("the plugin is not installed at %s. Install it with:\n  omarchy plugin add https://github.com/3thanD/desktop-pet.git --enable" % PLUGIN_DIR)
+        return 1
+    ok, out = host_set_enabled(True)
+    if not ok:
+        err("could not enable the plugin: " + out)
+        return 1
+    print(acc("●") + " desktop pet is " + acc("on"))
+    return 0
+
+
+def cmd_off(_args):
+    if is_on():
+        ipc("save")
+        ok, out = host_set_enabled(False)
+        if not ok:
+            err("could not disable the plugin: " + out)
+            return 1
+    helper("dock-restore")
+    print(dim("○") + " desktop pet is off (all overlays removed, dock restored)")
+    return 0
+
+
+def cmd_toggle(args):
+    return cmd_off(args) if is_on() else cmd_on(args)
+
+
+def valid_pet(p):
+    p = (p or "").lower()
+    if p in PETS:
+        return p
+    err("unknown pet '%s'. Choose one of: %s" % (p, ", ".join(PETS)))
+    return None
+
+
+def cmd_pick(args):
+    if not args:
+        err("usage: desktop-pet pick <%s>" % "|".join(PETS))
+        return 2
+    pet = valid_pet(args[0])
+    if not pet:
+        return 2
+    cfg = load_config()
+    cfg["pet"] = pet
+    save_config(cfg)
+    name = pet_label(cfg, pet)
+    print("\n".join("  " + r for r in preview(pet)))
+    print(acc(name) + " the " + pet + " is now your pet" + ("" if is_on() else dim("  (pet is off; run: desktop-pet on)")))
+    slug = theme_slug()
+    if cfg["themePets"].get(slug) and cfg["themePets"][slug] != pet:
+        print(dim("  note: your theme-pet mapping shows %s on theme %s" % (cfg["themePets"][slug], slug)))
+    return 0
+
+
+def cmd_list(_args):
+    cfg = load_config()
+    cur = (live_status() or {}).get("pet") or cfg["pet"]
+    for pet in PETS:
+        rows = preview(pet)
+        mark = acc("▶ ") if pet == cur else "  "
+        name = pet_label(cfg, pet)
+        for i, r in enumerate(rows):
+            right = ""
+            if i == 1:
+                right = (acc(pet) if pet == cur else pet) + dim("  \"" + name + "\"")
+            elif i == 2:
+                right = dim(PET_DESC[pet])
+            elif i == 3 and pet == cur:
+                right = acc("(current)", False)
+            print((mark if i == 2 else "  ") + r + "  " + right)
+        print()
+    return 0
+
+
+def cmd_name(args):
+    if not args:
+        err("usage: desktop-pet name <name>")
+        return 2
+    name = " ".join(args).strip()[:24]
+    name = re.sub(r"[\x00-\x1f\x7f]", "", name)
+    cfg = load_config()
+    pet = cfg["pet"]
+    cfg["names"][pet] = name
+    save_config(cfg)
+    print("Your " + pet + " is now called " + acc(name))
+    return 0
+
+
+def cmd_feed(_args):
+    if is_on():
+        ipc("feed")
+        print(acc("*") + " you tossed a berry treat")
+    else:
+        d, pet = load_doc(), load_config()["pet"]
+        r = (d.get("pets") or {}).get(pet)
+        if d.get("version") == 2 and r:
+            r["hunger"] = min(100, float(r.get("hunger", 50)) + 20)
+            save_doc(d)
+            print("Fed (the pet is off, so it will enjoy it when it comes back).")
+        else:
+            print("Nothing to feed yet: the pet hasn't hatched.")
+    return 0
+
+
+def cmd_heal(_args):
+    if is_on():
+        ipc("heal")
+    r = helper("dock-restore")
+    print(acc("✚") + " all eaten and burned text restored" + (", dock icons put back" if r.get("restored") else ""))
+    return 0
+
+
+def cmd_accessory(args):
+    cfg = load_config()
+    if not args:
+        print("accessory: " + acc(cfg["accessory"]))
+        return 0
+    a = args[0].lower()
+    if a == "list":
+        slug = theme_slug()
+        print(acc("auto") + dim("  follow the theme (now: %s → %s)" % (slug or "?", THEME_ACC.get(slug, "bow"))))
+        print(acc("none") + dim("  no accessory"))
+        print("  ".join(ACCESSORIES))
+        return 0
+    if a not in ACCESSORIES and a not in ("auto", "none"):
+        err("unknown accessory '%s'. Try: auto, none, %s" % (a, ", ".join(ACCESSORIES)))
+        return 2
+    cfg["accessory"] = a
+    save_config(cfg)
+    print("accessory set to " + acc(a))
+    return 0
+
+
+def on_off(args, usage):
+    if not args or args[0].lower() not in ("on", "off"):
+        err("usage: " + usage)
+        return None
+    return args[0].lower() == "on"
+
+
+def cmd_eat(args):
+    v = on_off(args, "desktop-pet eat <on|off>")
+    if v is None:
+        return 2
+    cfg = load_config()
+    cfg["eat"] = v
+    save_config(cfg)
+    print("eating terminal text: " + acc("on" if v else "off") + ("" if v else dim("  (it will snack on berries instead)")))
+    return 0
+
+
+def cmd_goblin_steal(args):
+    v = on_off(args, "desktop-pet goblin-steal <on|off>")
+    if v is None:
+        return 2
+    cfg = load_config()
+    cfg["goblinSteal"] = v
+    save_config(cfg)
+    if not v:
+        helper("dock-restore")
+    print("goblin dock stealing: " + acc("on" if v else "off"))
+    return 0
+
+
+def cmd_chatty(args):
+    if not args or args[0].lower() not in CHATTY:
+        err("usage: desktop-pet chatty <%s>" % "|".join(CHATTY))
+        return 2
+    cfg = load_config()
+    cfg["chatty"] = args[0].lower()
+    save_config(cfg)
+    print("chattiness: " + acc(cfg["chatty"]))
+    return 0
+
+
+def cmd_brain(args):
+    cfg = load_config()
+    if args and args[0].lower() == "context":
+        v = on_off(args[1:], "desktop-pet brain context <on|off>")
+        if v is None:
+            return 2
+        cfg["brainContext"] = v
+        save_config(cfg)
+        print("share focused window title with Claude: " + acc("on" if v else "off"))
+        return 0
+    if not args:
+        print("brain: " + acc("on" if cfg["brain"] else "off") + dim("   context sharing: ") + ("on" if cfg["brainContext"] else "off"))
+        return 0
+    v = on_off(args, "desktop-pet brain <on|off> | brain context <on|off>")
+    if v is None:
+        return 2
+    cfg["brain"] = v
+    save_config(cfg)
+    print("brain: " + acc("on" if v else "off") + ("" if v else dim("  (canned lines only, no Claude calls)")))
+    return 0
+
+
+def cmd_persona(args):
+    cfg = load_config()
+    pet = cfg["pet"]
+    if not args:
+        cur = cfg["persona"].get(pet)
+        print(("custom persona for %s: " % pet) + (cur if cur else dim("(default)")))
+        return 0
+    if args[0] == "reset":
+        cfg["persona"].pop(pet, None)
+        save_config(cfg)
+        print("persona for %s reset to default" % pet)
+        return 0
+    text = re.sub(r"[\x00-\x1f\x7f]", " ", " ".join(args)).strip()[:600]
+    cfg["persona"][pet] = text
+    save_config(cfg)
+    print("persona for %s set" % pet)
+    return 0
+
+
+def cmd_theme_pet(args):
+    cfg = load_config()
+    if not args:
+        tp = cfg["themePets"]
+        if not tp:
+            print(dim("no theme-pet mappings (the pet you pick is used on every theme)"))
+        for k, v in sorted(tp.items()):
+            print("  %s → %s" % (k, v))
+        return 0
+    if len(args) < 2:
+        err("usage: desktop-pet theme-pet <theme> <pet|off>")
+        return 2
+    theme = " ".join(args[:-1]).strip().lower().replace(" ", "-").replace("_", "-")
+    pet = args[-1].lower()
+    if pet in ("off", "none", "clear"):
+        cfg["themePets"].pop(theme, None)
+        save_config(cfg)
+        print("theme %s now uses your picked pet" % theme)
+        return 0
+    if not valid_pet(pet):
+        return 2
+    cfg["themePets"][theme] = pet
+    save_config(cfg)
+    print("on theme %s the pet will be the %s" % (acc(theme), acc(pet)))
+    return 0
+
+
+def pet_ctx():
+    cfg = load_config()
+    st = live_status() or load_state()
+    pet = st.get("pet") or cfg["pet"]
+    return {
+        "pet": pet, "name": cfg["names"].get(pet, ""), "mood": st.get("mood", "content"), "stage": st.get("stageName", ""), "ageDays": st.get("ageDays", 0),
+        "hunger": st.get("hunger", 70), "happiness": st.get("happiness", 70), "energy": st.get("energy", 70),
+        "theme": theme_slug(), "accessory": st.get("accessory", ""),
+    }
+
+
+def speak(ctx, message, history=None):
+    p = dict(ctx)
+    p.update({"trigger": "chat" if history is not None else "say", "message": message})
+    if history:
+        p["history"] = history
+    r = helper("talk", json.dumps(p), timeout=45)
+    text = r.get("text") or "..."
+    if is_on():
+        ipc("bubble", text)
+    return text, r.get("source", "canned")
+
+
+def cmd_say(args):
+    if not args:
+        err('usage: desktop-pet say "<message>"')
+        return 2
+    ctx = pet_ctx()
+    msg = " ".join(args)
+    text, source = speak(ctx, msg)
+    print(acc(ctx["name"] + ":") + " " + text + ("" if source == "claude" else dim("  (" + source + ")")))
+    return 0
+
+
+def cmd_chat(_args):
+    ctx = pet_ctx()
+    print(dim("Chatting with ") + acc(ctx["name"]) + dim(" (Ctrl-D to leave)"))
+    history = []
+    while True:
+        try:
+            msg = input(fg(TC.get("foreground", "#dddddd"), "you› ", True))
+        except (EOFError, KeyboardInterrupt):
+            print()
+            break
+        msg = msg.strip()
+        if not msg:
+            continue
+        text, source = speak(ctx, msg, history)
+        print(acc(ctx["name"] + "› ") + text + ("" if source == "claude" else dim("  (" + source + ")")))
+        history += [{"who": "user", "text": msg}, {"who": "pet", "text": text}]
+        history = history[-12:]
+    return 0
+
+
+def cmd_forget(_args):
+    try:
+        os.remove(MEMORY)
+    except FileNotFoundError:
+        pass
+    print("memory cleared; %s forgot recent events and lines" % pet_ctx()["name"])
+    return 0
+
+
+def cmd_config(_args):
+    print(dim("config file: ") + CONFIG)
+    print(dim("state file:  ") + STATE)
+    print(json.dumps(load_config(), indent=1))
+    return 0
+
+
+def cmd_reset(args):
+    if "-y" not in args and "--yes" not in args:
+        try:
+            ans = input("Reset all desktop-pet settings (pet, names, accessory, personas, chat) to defaults? [y/N] ")
+        except EOFError:
+            ans = ""
+        if ans.strip().lower() not in ("y", "yes"):
+            print("cancelled")
+            return 1
+    save_config(json.loads(json.dumps(DEFAULTS)))
+    print("settings reset to defaults (slime, auto accessory, chatty low, brain on)")
+    return 0
+
+
+def cmd_wake(_args):
+    if not is_on():
+        err("the pet is off")
+        return 1
+    ipc("wake")
+    print("*yawn*")
+    return 0
+
+
+def cmd_size(args):
+    cfg = load_config()
+    if not args:
+        print("size: " + acc("%s%%" % cfg.get("size", 100)) + dim("  (50, 100 or 200)"))
+        return 0
+    v = args[0].strip().rstrip("%")
+    if v not in ("50", "100", "200"):
+        err("size must be 50, 100 or 200 (percent)")
+        return 2
+    cfg["size"] = int(v)
+    save_config(cfg)
+    print("size set to " + acc(v + "%") + dim("  (2, 4 or 8 screen pixels per art pixel)"))
+    return 0
+
+
+def cmd_color(args):
+    cfg = load_config()
+    if not args:
+        print("color: " + acc(str(cfg.get("color", "theme"))) + dim("  (theme | complement | custom #hex)"))
+        return 0
+    a = args[0].lower()
+    if a == "custom":
+        if len(args) < 2:
+            err("usage: desktop-pet color custom '#rrggbb'")
+            return 2
+        a = args[1].lower()
+    if re.fullmatch(r"#?[0-9a-f]{6}", a):
+        a = "#" + a.lstrip("#")
+    elif a not in ("theme", "complement"):
+        err("color must be theme, complement or custom #rrggbb")
+        return 2
+    cfg["color"] = a
+    save_config(cfg)
+    swatch = bg(a, "  ") + " " if a.startswith("#") else ""
+    print("color: " + swatch + acc(a))
+    return 0
+
+
+def cmd_fetch(args):
+    if args and args[0] in ("on", "off"):
+        cfg = load_config()
+        cfg["fetch"] = args[0] == "on"
+        save_config(cfg)
+        print("fetch: " + acc(args[0]))
+        return 0
+    if not is_on():
+        err("the pet is off")
+        return 1
+    r = ipc("fetch")
+    print(acc("●") + " ball thrown! Grab it and flick it with the mouse." if r == "ok" else (r or "?"))
+    return 0
+
+
+def cmd_buddy(args):
+    cfg = load_config()
+    if not args:
+        hooked = any(has_block(p) for p in (BASHRC, ZSHRC))
+        print("build buddy: " + acc("on" if cfg.get("buddy", True) else "off")
+              + dim("   shell hook: ") + ("installed" if hooked else "not installed (desktop-pet setup --buddy)"))
+        return 0
+    if args[0] not in ("on", "off"):
+        err("usage: desktop-pet buddy <on|off>")
+        return 2
+    cfg["buddy"] = args[0] == "on"
+    save_config(cfg)
+    print("build buddy: " + acc(args[0]))
+    if cfg["buddy"] and not any(has_block(p) for p in (BASHRC, ZSHRC)):
+        print(dim("  the shell hook isn't installed yet: desktop-pet setup --buddy"))
+    return 0
+
+
+EVO_PREVIEW = {
+    1: ["   oo   ", "  obbo  ", "  oeeo  ", "   oo   "],
+    2: ["    o   ", "  oooo  ", " obbbbo ", " obeebo ", "  oooo  "],
+    3: ["    o   ", "  oooo  ", " oBbBbo ", "obeebbeo", "obbbbbbo", " oooooo "],
+    4: [" y  o  y", "  oooo  ", " owwwwo ", "obeebbeo", "obbbbbbo", " oooooo "],
+}
+
+
+def cmd_evolve(args):
+    if args and args[0] == "--debug-set":
+        if len(args) < 2:
+            err("usage: desktop-pet evolve --debug-set <1-4|baby|teen|adult|elder> [classic|cyber|chonk]")
+            return 2
+        st = args[1]
+        st = str(STAGES.index(st)) if st in STAGES[1:] else st
+        if not is_on():
+            err("the pet is off")
+            return 1
+        print(ipc("evolveSet", st, args[2] if len(args) > 2 else "classic") or "?")
+        return 0
+    cfg = load_config()
+    pet = cfg["pet"]
+    st = live_status() or load_state()
+    cur = st.get("stage", 1)
+    cols = pet_colors(pet)
+    print(acc("Evolution") + dim("  (%s, now: %s)" % (pet, st.get("stageName") or STAGES[cur])))
+    rows = max(len(v) for v in EVO_PREVIEW.values())
+    for r in range(rows):
+        line = ""
+        for stg in (1, 2, 3, 4):
+            art = EVO_PREVIEW[stg]
+            pad = rows - len(art)
+            row = art[r - pad] if r >= pad else " " * 8
+            cell = ""
+            for ch in row:
+                if ch == " " or not USE_COLOR:
+                    cell += "  " if (ch == " " or USE_COLOR) else "██"
+                else:
+                    cell += bg({"o": "#333344", "b": cols["b"], "B": "#555566", "e": "#101018",
+                                "w": "#ffffff", "y": cols["y"]}.get(ch, cols["b"]), "  ")
+            line += cell + "   "
+        print("  " + line)
+    names = ["baby", "teen", "adult", "elder"]
+    print("  " + "   ".join(("[" + n + "]" if i + 1 == cur else n).center(16) for i, n in enumerate(names)))
+    print()
+    print(dim("  teen:  2+ days old, 20+ meals, 2+ care days"))
+    print(dim("  adult: 7+ days old, 70+ meals, 5+ care days; diet decides the form:"))
+    print(dim("         mostly digits = cyber, vowel-heavy = chonk, otherwise classic"))
+    print(dim("  elder: 30+ days old, 300+ meals, 20+ care days, and happy (rare)"))
+    if st.get("meals") is not None:
+        print(dim("  now:   %s days old, %s meals, %s care days" % (st.get("ageDays", 0), st.get("meals", 0), st.get("careDays", 0))))
+    return 0
+
+
+def cmd_new(args):
+    cfg = load_config()
+    pet = cfg["pet"]
+    if "-y" not in args and "--yes" not in args:
+        try:
+            ans = input("Start over with a new %s egg? %s's progress will be lost. [y/N] " % (pet, pet_label(cfg, pet)))
+        except EOFError:
+            ans = ""
+        if ans.strip().lower() not in ("y", "yes"):
+            print("cancelled")
+            return 1
+    cfg["names"].pop(pet, None)
+    save_config(cfg)
+    if is_on():
+        print(ipc("newEgg") or "?")
+    else:
+        d = load_doc()
+        if d.get("version") == 2:
+            (d.get("pets") or {}).pop(pet, None)
+            save_doc(d)
+    print("A new egg appears... " + dim("(name it once it hatches: desktop-pet name <name>)"))
+    return 0
+
+
+def cmd_coffee(_args):
+    cfg = load_config()
+    print(acc(pet_label(cfg, cfg["pet"])) + " wiggles hopefully: \"snacks keep me going!\"")
+    print("  Support desktop-pet: https://buymeacoffee.com/3thand")
+    return 0
+
+
+def cmd_goblin(args):
+    if not args or args[0] != "heist-now":
+        err("usage: desktop-pet goblin heist-now")
+        return 2
+    if not is_on():
+        err("the pet is off")
+        return 1
+    st = live_status() or {}
+    if st.get("pet") != "goblin":
+        err("the current pet is the %s; pick the goblin first (desktop-pet goblin)" % st.get("pet", "?"))
+        return 1
+    print(ipc("heist") or "?")
+    return 0
+
+
+def cmd_poke(args):
+    """Debug triggers: hungry | fire | heist"""
+    if not is_on():
+        err("the pet is off")
+        return 1
+    what = (args[0] if args else "hungry").lower()
+    if what not in ("hungry", "fire", "heist"):
+        err("usage: desktop-pet poke <hungry|fire|heist>")
+        return 2
+    print(ipc(what) or "?")
+    return 0
+
+
+# ------------------------------------------------------------------ setup / uninstall
+
+BIN_LINK = os.path.join(HOME, ".local/bin/desktop-pet")
+COMP_LINK = os.path.join(HOME, ".local/share/bash-completion/completions/desktop-pet")
+CFG_HOME = os.environ.get("XDG_CONFIG_HOME") or os.path.join(HOME, ".config")
+HYPR_LUA = os.path.join(CFG_HOME, "hypr/bindings.lua")
+HYPR_CONF = os.path.join(CFG_HOME, "hypr/bindings.conf")
+KITTY_CONF = os.path.join(CFG_HOME, "kitty/kitty.conf")
+BASHRC = os.path.join(HOME, ".bashrc")
+ZSHRC = os.path.join(os.environ.get("ZDOTDIR") or HOME, ".zshrc")
+MARK_BEGIN = ">>> desktop-pet >>>"
+MARK_END = "<<< desktop-pet <<<"
+LUA_BLOCK = """
+-- >>> desktop-pet >>>
+-- SUPER+CTRL+P toggles the desktop pet. This replaces Omarchy's default
+-- SUPER+CTRL+P binding (Power panel); the power menu stays on SUPER+ESCAPE.
+hl.unbind("SUPER + CTRL + P")
+o.bind("SUPER + CTRL + P", "Toggle desktop pet", os.getenv("HOME") .. "/.local/bin/desktop-pet toggle")
+-- <<< desktop-pet <<<
+"""
+CONF_BLOCK = """
+# >>> desktop-pet >>>
+# SUPER+CTRL+P toggles the desktop pet (replaces any existing SUPER+CTRL+P binding).
+unbind = SUPER CTRL, P
+bindd = SUPER CTRL, P, Toggle desktop pet, exec, $HOME/.local/bin/desktop-pet toggle
+# <<< desktop-pet <<<
+"""
+KITTY_BLOCK = """
+# >>> desktop-pet >>>
+# Local remote control so the desktop pet can read what's on screen (letters it
+# eats). socket-only + a socket in your private runtime dir: only you can use it.
+allow_remote_control socket-only
+listen_on unix:${XDG_RUNTIME_DIR}/kitty
+# <<< desktop-pet <<<
+"""
+
+
+def backup(path):
+    if os.path.exists(path):
+        dst = "%s.bak.desktop-pet.%d" % (path, int(time.time()))
+        with open(path, "rb") as a, open(dst, "wb") as b:
+            b.write(a.read())
+        return dst
+    return None
+
+
+def has_block(path):
+    try:
+        return MARK_BEGIN in open(path).read()
+    except OSError:
+        return False
+
+
+def strip_block(path):
+    if not has_block(path):
+        return False
+    backup(path)
+    s = open(path).read()
+    s = re.sub(r"\n*[^\n]*" + re.escape(MARK_BEGIN) + r".*?" + re.escape(MARK_END) + r"[^\n]*\n?", "\n", s, flags=re.S)
+    with open(path, "w") as f:
+        f.write(s.rstrip("\n") + "\n")
+    return True
+
+
+def kitty_remote_ok():
+    """Effective allow_remote_control / listen_on across kitty's config chain."""
+    vals = {}
+    for path in ("/etc/xdg/kitty/kitty.conf", KITTY_CONF):
+        try:
+            for line in open(path, errors="replace"):
+                parts = line.strip().split(None, 1)
+                if len(parts) == 2 and parts[0] in ("allow_remote_control", "listen_on"):
+                    vals[parts[0]] = parts[1].strip()
+        except OSError:
+            pass
+    arc = vals.get("allow_remote_control", "no").lower()
+    return arc in ("yes", "y", "true", "socket", "socket-only", "password") and vals.get("listen_on", "").startswith("unix:")
+
+
+def link_status(link, target):
+    return os.path.islink(link) and os.path.realpath(link) == os.path.realpath(target)
+
+
+def hypr_reload_ok():
+    if run(["hyprctl", "reload"])[0] != 0:
+        return True
+    time.sleep(0.5)
+    code, out = run(["hyprctl", "configerrors"])
+    return not out.strip() or out.strip() == "no errors"
+
+
+def buddy_block(kind):
+    hook = os.path.join(REPO_DIR, "shell", "desktop-pet-buddy." + kind)
+    return ("\n# >>> desktop-pet >>>\n# desktop-pet build buddy: records only command name, exit code and duration\n"
+            "[ -f '%s' ] && . '%s'\n# <<< desktop-pet <<<\n" % (hook, hook))
+
+
+def setup_plan(buddy=False):
+    steps = []
+    cli = os.path.join(REPO_DIR, "bin", "desktop-pet")
+    if not link_status(BIN_LINK, cli):
+        steps.append(("cli", "link %s -> %s" % (BIN_LINK, cli)))
+    comp = os.path.join(REPO_DIR, "completions", "desktop-pet.bash")
+    if not link_status(COMP_LINK, comp):
+        steps.append(("completion", "link bash completion %s" % COMP_LINK))
+    if os.path.isfile(HYPR_LUA):
+        if not has_block(HYPR_LUA):
+            steps.append(("bind-lua", "add SUPER+CTRL+P (toggle pet) to %s (backup first; replaces the default Power-panel binding)" % HYPR_LUA))
+    elif os.path.isfile(HYPR_CONF):
+        if not has_block(HYPR_CONF):
+            steps.append(("bind-conf", "add SUPER+CTRL+P (toggle pet) to %s (backup first)" % HYPR_CONF))
+    if shutil_which("kitty") and not kitty_remote_ok() and not has_block(KITTY_CONF):
+        steps.append(("kitty", "enable local kitty remote control in %s (backup first; socket-only, private runtime dir)" % KITTY_CONF))
+    if not os.path.isfile(CONFIG):
+        steps.append(("config", "create default settings %s" % CONFIG))
+    if buddy:
+        if os.path.isfile(BASHRC) and not has_block(BASHRC):
+            steps.append(("buddy-bash", "build buddy: source the shell hook from %s (backup first; logs only command name, exit code, duration)" % BASHRC))
+        if os.path.isfile(ZSHRC) and not has_block(ZSHRC):
+            steps.append(("buddy-zsh", "build buddy: source the shell hook from %s (backup first)" % ZSHRC))
+    return steps
+
+
+def shutil_which(name):
+    for d in os.environ.get("PATH", "").split(":"):
+        p = os.path.join(d, name)
+        if d and os.path.isfile(p) and os.access(p, os.X_OK):
+            return p
+    return None
+
+
+def cmd_setup(args):
+    yes = "-y" in args or "--yes" in args
+    buddy = "--buddy" in args
+    if not buddy and not yes and sys.stdin.isatty() and not any(has_block(p) for p in (BASHRC, ZSHRC)):
+        try:
+            buddy = input("Also install the optional build-buddy shell hook (the pet reacts to failed/passed "
+                          "commands; records only the command name, exit code and duration)? [y/N] ").strip().lower() in ("y", "yes")
+        except EOFError:
+            buddy = False
+    steps = setup_plan(buddy)
+    print(acc("desktop-pet setup") + dim("  (only touches files in your home directory)"))
+    if kitty_remote_ok():
+        print(dim("  kitty remote control: already enabled, kitty.conf will not be changed"))
+    if not shutil_which("kitty"):
+        print(dim("  kitty not found: letter-eating needs kitty; the pet will snack on berries instead"))
+    if not steps:
+        print(acc("✓") + " everything is already set up")
+        return 0
+    for _, text in steps:
+        print("  • " + text)
+    if not yes:
+        if not sys.stdin.isatty():
+            err("not a terminal; re-run with -y to apply")
+            return 1
+        try:
+            ans = input("Apply these changes? [Y/n] ").strip().lower()
+        except EOFError:
+            ans = "n"
+        if ans not in ("", "y", "yes"):
+            print("cancelled, nothing changed")
+            return 1
+    for key, _ in steps:
+        if key == "cli":
+            os.makedirs(os.path.dirname(BIN_LINK), exist_ok=True)
+            if os.path.exists(BIN_LINK) and not os.path.islink(BIN_LINK):
+                backup(BIN_LINK)
+            if os.path.lexists(BIN_LINK):
+                os.remove(BIN_LINK)
+            os.symlink(os.path.join(REPO_DIR, "bin", "desktop-pet"), BIN_LINK)
+        elif key == "completion":
+            os.makedirs(os.path.dirname(COMP_LINK), exist_ok=True)
+            if os.path.lexists(COMP_LINK):
+                os.remove(COMP_LINK)
+            os.symlink(os.path.join(REPO_DIR, "completions", "desktop-pet.bash"), COMP_LINK)
+        elif key in ("bind-lua", "bind-conf"):
+            path = HYPR_LUA if key == "bind-lua" else HYPR_CONF
+            b = backup(path)
+            with open(path, "a") as f:
+                f.write(LUA_BLOCK if key == "bind-lua" else CONF_BLOCK)
+            if not hypr_reload_ok():
+                with open(b) as src, open(path, "w") as dst:
+                    dst.write(src.read())
+                hypr_reload_ok()
+                err("Hyprland reported config errors; the keybinding change was reverted (backup: %s)" % b)
+        elif key == "kitty":
+            os.makedirs(os.path.dirname(KITTY_CONF), exist_ok=True)
+            backup(KITTY_CONF)
+            with open(KITTY_CONF, "a") as f:
+                f.write(KITTY_BLOCK)
+        elif key == "config":
+            save_config(json.loads(json.dumps(DEFAULTS)))
+        elif key in ("buddy-bash", "buddy-zsh"):
+            path = BASHRC if key == "buddy-bash" else ZSHRC
+            backup(path)
+            with open(path, "a") as f:
+                f.write(buddy_block("bash" if key == "buddy-bash" else "zsh"))
+        print(acc("✓") + " " + dict(steps)[key])
+    if any(k.startswith("buddy") for k, _ in steps):
+        print(dim("  build buddy works in new terminals; remove it any time with: desktop-pet uninstall"))
+    if any(k == "kitty" for k, _ in steps):
+        print(dim("  reopen your kitty windows (and btop) so they pick up remote control"))
+    if ":%s:" % os.path.join(HOME, ".local/bin") not in ":%s:" % os.environ.get("PATH", ""):
+        print(dim("  note: ~/.local/bin is not on your PATH; add it to run 'desktop-pet' by name"))
+    if not is_on():
+        print(dim("  the pet is off; run: desktop-pet on"))
+    return 0
+
+
+def cmd_uninstall(args):
+    purge = "--purge" in args
+    print(acc("desktop-pet uninstall"))
+    if is_on():
+        host_set_enabled(False)
+        print(acc("✓") + " pet turned off")
+    r = helper("dock-restore")
+    if r.get("restored"):
+        print(acc("✓") + " dock icons restored")
+    for link in (BIN_LINK, COMP_LINK):
+        if os.path.islink(link) and os.path.realpath(link).startswith(REPO_DIR):
+            os.remove(link)
+            print(acc("✓") + " removed " + link)
+    for path in (HYPR_LUA, HYPR_CONF):
+        if strip_block(path):
+            hypr_reload_ok()
+            print(acc("✓") + " removed the SUPER+CTRL+P binding from " + path)
+    if strip_block(KITTY_CONF):
+        print(acc("✓") + " removed the remote-control lines from " + KITTY_CONF)
+    for rc in (BASHRC, ZSHRC):
+        if strip_block(rc):
+            print(acc("✓") + " removed the build-buddy hook from " + rc)
+    if purge:
+        import shutil
+        shutil.rmtree(os.path.dirname(CONFIG), ignore_errors=True)
+        shutil.rmtree(STATE_DIR, ignore_errors=True)
+        print(acc("✓") + " deleted settings and state")
+    else:
+        print(dim("  kept settings (%s) and state (%s); use --purge to delete" % (CONFIG, STATE_DIR)))
+    print(dim("  to remove the plugin itself: omarchy plugin remove %s" % PLUGIN_ID))
+    return 0
+
+
+HELP = """{title} — a tiny pixel pet for your Omarchy desktop
+
+{u}
+  desktop-pet                    show status (pet, stats, accessory)
+  desktop-pet <command> [args]
+
+  Mouse: left-click pets it; right-click (or SUPER+SHIFT+left-click) opens its menu.
+
+{c}
+  on | off | toggle              show / remove the pet (off removes every overlay
+                                 instantly, restores the dock). Key: SUPER+CTRL+P (after setup)
+  pick <slime|cat|dragon|goblin> choose your pet (shortcut: desktop-pet cat)
+  list                           show all pets with a tiny preview
+  name <name>                    name the current pet (shown in its menu)
+  feed                           toss a berry treat (no terminal text eaten)
+  heal                           restore all eaten / burned text and dock icons now
+  wake                           wake the pet up (it sleeps 23:00-07:00)
+  accessory <auto|none|NAME>     theme accessory; 'accessory list' shows names
+  eat <on|off>                   allow eating letters from your terminal
+  goblin-steal <on|off>          allow the goblin to move/hide dock icons
+  theme-pet <theme> <pet|off>    optional: use a specific pet on one theme
+  size <50|100|200>              pet size in percent (crisp pixel steps)
+  color <theme|complement|custom #hex>
+                                 theme colors, the opposite hues (stands out), or your own
+  poke <hungry|fire|heist>       make it eat / breathe fire / steal right now
+  goblin heist-now               make the goblin steal (or return) a dock icon now
+  fetch [on|off]                 throw a ball (grab and flick it); on/off allows play
+  buddy <on|off>                 react to your terminal commands (needs setup --buddy)
+  evolve [--preview]             show the evolution stages and your pet's progress
+  evolve --debug-set <stage> [classic|cyber|chonk]   force a stage (testing)
+  new [-y]                       start over with a new egg (asks first)
+  coffee                         support the project
+
+{b}
+  say "<message>"                talk to your pet; reply prints here and in its bubble
+  chat                           interactive chat (Ctrl-D to exit)
+  brain <on|off>                 off = canned lines only, zero Claude calls
+  brain context <on|off>         also share the focused window title (default off)
+  chatty <off|low|normal|high>   how often it talks on its own (default low)
+  persona "<text>" | reset       override the pet's personality
+  forget                         clear its short memory of recent events
+
+{s}
+  setup [-y] [--buddy]           link the CLI + completion, add the SUPER+CTRL+P
+                                 keybinding and kitty remote control (explains first);
+                                 --buddy also installs the build-buddy shell hook
+  uninstall [--purge]            undo setup, turn the pet off, restore the dock
+  config                         print config path and current settings
+  reset [-y]                     restore default settings (asks first)
+  help                           this help
+
+{p}
+  The brain uses your Claude Code CLI (model haiku) with all tools disabled; the
+  reply is shown as plain text only. Sent: the pet's name, stats, mood, time,
+  theme and recent pet events (incl. the few letters it ate). Never sent:
+  window titles, clipboard or terminal contents, unless 'brain context on'.
+
+{e}
+  desktop-pet dragon             switch to the baby dragon
+  desktop-pet name Sir Crunch    give it a name
+  desktop-pet accessory crown    wear a crown on every theme
+  desktop-pet eat off            keep the pet, protect your terminal
+  desktop-pet say "good morning!"
+  desktop-pet off                hide everything
+
+Settings: ~/.config/desktop-pet/config.json (live-reloaded)
+State:    ~/.local/state/desktop-pet/ (stats, memory, dock backup)"""
+
+
+def cmd_help(_args):
+    print(HELP.format(title=acc("desktop-pet"), u=acc("Usage"), c=acc("Pet"), b=acc("Brain (Claude)"),
+                      s=acc("Settings"), p=acc("Privacy"), e=acc("Examples")))
+    return 0
+
+
+COMMANDS = {
+    "status": cmd_status, "on": cmd_on, "off": cmd_off, "toggle": cmd_toggle, "pick": cmd_pick,
+    "list": cmd_list, "name": cmd_name, "feed": cmd_feed, "heal": cmd_heal, "accessory": cmd_accessory,
+    "eat": cmd_eat, "goblin-steal": cmd_goblin_steal, "chatty": cmd_chatty, "brain": cmd_brain,
+    "persona": cmd_persona, "theme-pet": cmd_theme_pet, "say": cmd_say, "chat": cmd_chat,
+    "forget": cmd_forget, "config": cmd_config, "reset": cmd_reset, "help": cmd_help, "wake": cmd_wake,
+    "poke": cmd_poke, "size": cmd_size, "color": cmd_color, "fetch": cmd_fetch, "buddy": cmd_buddy,
+    "evolve": cmd_evolve, "new": cmd_new, "coffee": cmd_coffee, "goblin-cmd": cmd_goblin, "setup": cmd_setup, "uninstall": cmd_uninstall,
+}
+
+
+def main(argv):
+    if not argv:
+        return cmd_status([])
+    cmd = argv[0].lower()
+    if cmd in ("-h", "--help"):
+        return cmd_help([])
+    if cmd == "goblin" and len(argv) > 1:
+        return cmd_goblin(argv[1:])
+    if cmd in PETS:
+        return cmd_pick([cmd])
+    fn = COMMANDS.get(cmd)
+    if not fn:
+        err("unknown command '%s'. Pets: %s. Run 'desktop-pet help'." % (argv[0], ", ".join(PETS)))
+        return 2
+    return fn(argv[1:]) or 0
+
+
+if __name__ == "__main__":
+    try:
+        sys.exit(main(sys.argv[1:]))
+    except KeyboardInterrupt:
+        sys.exit(130)

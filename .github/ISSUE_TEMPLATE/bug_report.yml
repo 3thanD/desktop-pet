@@ -1,0 +1,33 @@
+name: Bug report
+description: Something about the pet doesn't work
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you expect, and what did the pet do instead? Screenshots welcome.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versions
+      description: "Output of `omarchy version`, and the pet version from manifest.json"
+  - type: textarea
+    id: status
+    attributes:
+      label: desktop-pet status
+      description: "Output of `NO_COLOR=1 desktop-pet` and `desktop-pet config`"
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "Output of `quickshell log -p /usr/share/omarchy/shell | grep -i pet | tail -50`"
+      render: text
+  - type: input
+    id: setup
+    attributes:
+      label: Setup
+      description: Monitors and scale, terminal (kitty?), dock, Claude CLI installed?
