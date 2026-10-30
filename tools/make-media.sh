@@ -23,15 +23,20 @@ need grim; need ffmpeg; need hyprctl; need python3
 
 ipc() { omarchy-shell desktoppet "$@" >/dev/null 2>&1; }
 cfg_get() { python3 -c "import json,os;print(json.load(open(os.path.expanduser('~/.config/desktop-pet/config.json'))).get('$1',''))"; }
+# Hyprland 0.56+ with a Lua config takes Lua dispatcher expressions.
+hl() { hyprctl dispatch "$1" >/dev/null 2>&1; }
 mon() { hyprctl -j monitors | python3 -c "import json,sys;m=[m for m in json.load(sys.stdin) if m['focused']][0];print(m['name'])"; }
 
+DEMO_WS="${DEMO_WS:-9}"
+ORIG_WS=$(hyprctl -j activeworkspace | python3 -c "import json,sys;print(json.load(sys.stdin)['id'])")
 ORIG_PET=$(cfg_get pet); ORIG_SIZE=$(cfg_get size); ORIG_COLOR=$(cfg_get color)
 ORIG_THEME=$(cat ~/.local/state/omarchy/current/theme.name 2>/dev/null)
 restore() {
   "$PET" pick "${ORIG_PET:-slime}" >/dev/null; "$PET" size "${ORIG_SIZE:-100}" >/dev/null
   "$PET" color "${ORIG_COLOR:-theme}" >/dev/null
   [[ -n $ORIG_THEME && $(cat ~/.local/state/omarchy/current/theme.name) != "$ORIG_THEME" ]] && omarchy theme set "$ORIG_THEME" >/dev/null 2>&1
-  [[ -n ${BTOP_ADDR:-} ]] && hyprctl dispatch closewindow "address:$BTOP_ADDR" >/dev/null 2>&1
+  [[ -n ${BTOP_ADDR:-} ]] && hl "hl.dsp.window.close({ window = \"address:$BTOP_ADDR\" })"
+  hl "hl.dsp.focus({ workspace = \"$ORIG_WS\" })"
 }
 trap 'restore; rm -rf "$WORK"' EXIT
 
@@ -59,6 +64,14 @@ record() {
 omarchy theme set hackerman >/dev/null 2>&1; sleep 3
 omarchy launch tui btop >/dev/null 2>&1 & sleep 3
 BTOP_ADDR=$(hyprctl -j clients | python3 -c "import json,sys;print(next((c['address'] for c in json.load(sys.stdin) if c['class']=='org.omarchy.btop'),''))")
+[[ -z $BTOP_ADDR ]] && { echo "btop window did not appear" >&2; exit 1; }
+# Record on a workspace of its own with btop tiled full-size, so nothing else
+# on the desktop (terminals, chats, notifications) ends up in the media.
+hl "hl.dsp.window.move({ workspace = \"$DEMO_WS\", follow = false, window = \"address:$BTOP_ADDR\" })"
+hl "hl.dsp.window.float({ action = \"disable\", window = \"address:$BTOP_ADDR\" })"
+hl "hl.dsp.focus({ workspace = \"$DEMO_WS\" })"; sleep 2
+others=$(hyprctl -j clients | python3 -c "import json,sys;print(sum(1 for c in json.load(sys.stdin) if c['workspace']['id']==$DEMO_WS and c['address']!='$BTOP_ADDR'))")
+[[ $others != 0 ]] && { echo "workspace $DEMO_WS is not empty; set DEMO_WS to a free one" >&2; exit 1; }
 "$PET" heal >/dev/null; "$PET" size 200 >/dev/null; "$PET" color theme >/dev/null
 
 "$PET" pick slime >/dev/null; ipc wake; sleep 2
