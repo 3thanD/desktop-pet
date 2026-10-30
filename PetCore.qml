@@ -110,6 +110,7 @@ Item {
   property int shakeX: 0               // drawn screen-shake offsets
   property int shakeY: 0
   readonly property var storeObj: store
+  readonly property var skillsRef: skills
 
   // Size: whole-pixel multiples keep the art crisp (50/100/200% = 2/4/8 px per art pixel).
   readonly property int sizePct: [50, 100, 200].indexOf(Number(cfg.size)) >= 0 ? Number(cfg.size) : 100

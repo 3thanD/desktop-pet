@@ -7,6 +7,10 @@ import subprocess
 import sys
 import time
 
+sys.dont_write_bytecode = True   # never write .pyc into the plugin dir (the shell would reload it)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.realpath(__file__))), "scripts"))
+import skills as sk  # noqa: E402  (recipes, validation, pitch queue)
+
 HOME = os.path.expanduser("~")
 PLUGIN_ID = "3thand.desktop-pet"
 # The repo / plugin checkout this script lives in (works from the clone and via the ~/.local/bin link).
@@ -44,6 +48,7 @@ DEFAULTS = {
     "pet": "slime", "names": {}, "accessory": "auto", "eat": True, "goblinSteal": True,
     "chatty": "low", "brain": True, "brainContext": False, "persona": {}, "themePets": {},
     "size": 100, "color": "theme", "fetch": True, "buddy": True,
+    "skillsOn": True, "skills": {}, "skillSound": False, "hoardLabel": "",
 }
 
 # ------------------------------------------------------------------ colors
@@ -114,7 +119,7 @@ def load_config():
         pass
     except Exception as e:
         err("config file is not valid JSON (%s); using defaults" % e)
-    for k in ("names", "persona", "themePets"):
+    for k in ("names", "persona", "themePets", "skills"):
         if not isinstance(cfg.get(k), dict):
             cfg[k] = {}
     return cfg
@@ -358,8 +363,8 @@ def cmd_off(_args):
         if not ok:
             err("could not disable the plugin: " + out)
             return 1
-    helper("dock-restore")
-    print(dim("○") + " desktop pet is off (all overlays removed, dock restored)")
+    helper("restore-all")
+    print(dim("○") + " desktop pet is off (all overlays and skills removed, dock and wallpaper restored)")
     return 0
 
 
@@ -444,11 +449,21 @@ def cmd_feed(_args):
     return 0
 
 
+def cmd_pet(_args):
+    if not is_on():
+        err("the pet is off")
+        return 1
+    ipc("pat")
+    print(acc("♥") + " you petted " + pet_label(load_config(), load_config()["pet"]))
+    return 0
+
+
 def cmd_heal(_args):
     if is_on():
         ipc("heal")
-    r = helper("dock-restore")
-    print(acc("✚") + " all eaten and burned text restored" + (", dock icons put back" if r.get("restored") else ""))
+    r = helper("restore-all")
+    print(acc("✚") + " all eaten and burned text restored, skills stopped"
+          + (", dock icons put back" if r.get("dock") else "") + (", wallpaper restored" if r.get("wallpaper") else ""))
     return 0
 
 
@@ -860,6 +875,275 @@ def cmd_poke(args):
     return 0
 
 
+# ------------------------------------------------------------------ skills
+
+ORIGIN_LABEL = {"builtin": "built-in", "user": "yours", "pending": "pitched"}
+
+
+def skills_reload():
+    if is_on():
+        ipc("skillsReload")
+
+
+def onoff_txt(v):
+    return fg(TC.get("green", "#8cc570"), "on ", True) if v else dim("off")
+
+
+def cmd_skills(args):
+    sub = args[0].lower() if args else "list"
+    rest = args[1:]
+    fn = {"list": skills_list, "review": skills_review, "enable": skills_enable, "disable": skills_disable,
+          "on": skills_master, "off": skills_master, "pitch": skills_pitch, "remove": skills_remove,
+          "run": skills_run, "preview": skills_run, "approve": skills_approve, "reject": skills_reject,
+          "show": skills_show, "sound": skills_sound, "hoard-label": skills_hoard_label, "ids": skills_ids}.get(sub)
+    if not fn:
+        err("usage: desktop-pet skills [list|review|enable ID|disable ID|on|off|pitch|remove ID|run ID|show ID|"
+            "approve ID|reject ID|sound on|off|hoard-label TEXT|off]")
+        return 2
+    return fn(rest if sub not in ("on", "off") else [sub])
+
+
+def skills_ids(args):
+    """Ids for tab completion: pending ones for approve/reject, user ones for remove."""
+    skills, pending, _ = sk.discover()
+    what = args[0] if args else ""
+    if what in ("approve", "reject"):
+        ids = [p["id"] for p in pending]
+    elif what == "remove":
+        ids = [x["id"] for x in skills if x["origin"] == "user"] + [p["id"] for p in pending]
+    elif what in ("run", "preview", "show"):
+        ids = [x["id"] for x in skills] + [p["id"] for p in pending]
+    else:
+        ids = [x["id"] for x in skills]
+    print(" ".join(ids))
+    return 0
+
+
+def skills_list(_args):
+    cfg = load_config()
+    skills, pending, errors = sk.discover()
+    master = cfg.get("skillsOn", True) is not False
+    print(acc("Skills") + dim("   all skills: ") + onoff_txt(master).strip()
+          + dim("   sounds: ") + ("on" if cfg.get("skillSound") is True else "off"))
+    cur = cfg["pet"]
+    for pet in PETS + ["any"]:
+        mine = [x for x in skills if x["recipe"]["pet"] == pet]
+        if not mine:
+            continue
+        print(("  " + acc(pet, False) if pet == cur else "  " + pet) + (dim("  (current pet)") if pet == cur else ""))
+        for x in mine:
+            r = x["recipe"]
+            on = sk.is_enabled(cfg, x["id"], x["origin"])
+            print("    %s %-16s %s %s" % (onoff_txt(on), x["id"], r["name"], dim("· " + ORIGIN_LABEL[x["origin"]])))
+    if pending:
+        print("  " + acc("pitched by your pet, waiting for you (%d)" % len(pending), False))
+        for p in pending:
+            print("    %s %-16s %s %s" % (fg(TC.get("yellow", "#e5c07b"), "new", True), p["id"], p["recipe"]["name"],
+                                       dim("· " + p["pet"] + ' · "' + p["pitch"][:60] + '"')))
+        print(dim("    review them: desktop-pet skills review"))
+    for e in errors:
+        print("  " + fg(TC.get("red", "#e05561"), "rejected ", True) + os.path.basename(e["file"]) + dim(" (" + e["origin"] + "): ")
+              + e["errors"][0])
+    print(dim("  user skills: %s   ·   desktop-pet skills enable|disable ID · review · pitch" % sk.USER_DIR.replace(HOME, "~")))
+    return 0
+
+
+def print_recipe(p_or_s, pitch=None):
+    r = p_or_s["recipe"]
+    print(acc(r["name"]) + dim("  (%s, %s skill)" % (r["id"], r["pet"])))
+    if pitch:
+        print("  " + fg(TC.get("yellow", "#e5c07b"), "pitch: ", True) + '"' + pitch + '"')
+    if r.get("description"):
+        print("  " + r["description"])
+    for line in sk.describe(r):
+        print("  " + (dim(line) if line.startswith(("touches", "everything")) else line))
+
+
+def skills_show(args):
+    if not args:
+        err("usage: desktop-pet skills show ID")
+        return 2
+    skills, pending, _ = sk.discover()
+    for x in skills + pending:
+        if x["id"] == args[0]:
+            print_recipe(x, x.get("pitch"))
+            print(dim(json.dumps(x["recipe"], indent=1)))
+            return 0
+    err("no skill '%s'" % args[0])
+    return 1
+
+
+def skills_review(args):
+    pending = sk.discover()[1]
+    if not pending:
+        print("No pitched skills waiting. " + dim("(your pet pitches at most one a day with the brain on; or: desktop-pet skills pitch)"))
+        return 0
+    interactive = sys.stdin.isatty() and "--list" not in args
+    for i, p in enumerate(pending):
+        print()
+        print(dim("[%d/%d] " % (i + 1, len(pending))), end="")
+        print_recipe(p, p["pitch"])
+        print(dim("  recipe:"))
+        for line in json.dumps(p["recipe"], indent=1).splitlines():
+            print(dim("    " + line))
+        if not interactive:
+            print(dim("  decide: desktop-pet skills preview|approve|reject " + p["id"]))
+            continue
+        while True:
+            try:
+                ans = input(acc("  [p]review once, [a]pprove, [r]eject, [s]kip, [q]uit? ", False)).strip().lower()
+            except EOFError:
+                ans = "q"
+            if ans in ("p", "preview"):
+                if p["pet"] != (live_status() or {}).get("pet"):
+                    print(dim("  (preview runs on the %s; switch with: desktop-pet pick %s)" % (p["pet"], p["pet"])))
+                skills_run([p["id"]])
+                continue
+            if ans in ("a", "approve"):
+                skills_approve([p["id"]])
+            elif ans in ("r", "reject"):
+                skills_reject([p["id"]])
+            elif ans in ("q", "quit"):
+                return 0
+            break
+    return 0
+
+
+def skills_approve(args):
+    if not args:
+        err("usage: desktop-pet skills approve ID")
+        return 2
+    ok, msg = sk.approve(args[0])
+    if not ok:
+        err(msg)
+        return 1
+    skills_reload()
+    print(acc("✓") + " approved and enabled " + acc(msg) + dim("  (saved in %s)" % sk.USER_DIR.replace(HOME, "~")))
+    return 0
+
+
+def skills_reject(args):
+    if not args:
+        err("usage: desktop-pet skills reject ID")
+        return 2
+    ok, msg = sk.reject(args[0])
+    if not ok:
+        err(msg)
+        return 1
+    skills_reload()
+    print("rejected " + msg + dim(" (deleted)"))
+    return 0
+
+
+def skills_known(sid):
+    skills, pending, _ = sk.discover()
+    return next((x for x in skills if x["id"] == sid), None)
+
+
+def skills_enable(args, on=True):
+    if not args:
+        err("usage: desktop-pet skills %s ID" % ("enable" if on else "disable"))
+        return 2
+    x = skills_known(args[0])
+    if not x:
+        if sk.find_pending(args[0]):
+            err("'%s' is still pending; review it first: desktop-pet skills review" % args[0])
+        else:
+            err("no skill '%s' (desktop-pet skills lists them)" % args[0])
+        return 1
+    cfg = load_config()
+    cfg["skills"][x["id"]] = bool(on)
+    save_config(cfg)
+    print("skill %s: %s" % (acc(x["id"]), acc("on" if on else "off")))
+    return 0
+
+
+def skills_disable(args):
+    return skills_enable(args, on=False)
+
+
+def skills_master(args):
+    on = args[0] == "on"
+    cfg = load_config()
+    cfg["skillsOn"] = on
+    save_config(cfg)
+    if not on:
+        if is_on():
+            ipc("heal")
+        helper("restore-all")
+    print("pet skills: " + acc("on" if on else "off") + ("" if on else dim("  (no skill activity at all; effects removed)")))
+    return 0
+
+
+def skills_sound(args):
+    v = on_off(args, "desktop-pet skills sound <on|off>")
+    if v is None:
+        return 2
+    cfg = load_config()
+    cfg["skillSound"] = v
+    save_config(cfg)
+    print("skill sounds: " + acc("on" if v else "off"))
+    return 0
+
+
+def skills_hoard_label(args):
+    cfg = load_config()
+    if not args:
+        print("hoard label: " + (acc(cfg.get("hoardLabel") or "") or dim("(none)")))
+        return 0
+    text = "" if args == ["off"] else re.sub(r"[\x00-\x1f\x7f]", "", " ".join(args)).strip()[:24]
+    cfg["hoardLabel"] = text
+    save_config(cfg)
+    print("hoard label: " + (acc(text) if text else dim("(none)")))
+    return 0
+
+
+def skills_remove(args):
+    if not args:
+        err("usage: desktop-pet skills remove ID")
+        return 2
+    ok, msg = sk.remove(args[0])
+    if not ok:
+        err(msg)
+        return 1
+    skills_reload()
+    print("removed " + acc(msg))
+    return 0
+
+
+def skills_run(args):
+    if not args:
+        err("usage: desktop-pet skills run ID")
+        return 2
+    if not is_on():
+        err("the pet is off")
+        return 1
+    ipc("skillsReload")
+    time.sleep(1.2)
+    r = ipc("runSkill", args[0])
+    print(acc("▶") + " " + args[0] + ": " + (r or "?"))
+    return 0 if r == "ok" else 1
+
+
+def skills_pitch(_args):
+    cfg = load_config()
+    if not cfg.get("brain", True):
+        err("the brain is off; pitches need Claude (desktop-pet brain on)")
+        return 1
+    ctx = pet_ctx()
+    print(dim("asking %s to think up a new trick (Claude, tools disabled)..." % (ctx["name"] or "your pet")))
+    r = helper("skills-pitch", json.dumps(ctx), timeout=200)
+    if not r.get("ok"):
+        err(r.get("reason") or "no pitch this time")
+        return 1
+    skills_reload()
+    if is_on():
+        ipc("bubble", r.get("pitch") or "I have an idea!")
+    print(acc((ctx["name"] or ctx["pet"]) + ":") + ' "' + (r.get("pitch") or "") + '"')
+    print("  queued " + acc(r["id"]) + dim(" (%s); nothing runs until you approve it: desktop-pet skills review" % r.get("name", "")))
+    return 0
+
+
 # ------------------------------------------------------------------ setup / uninstall
 
 BIN_LINK = os.path.join(HOME, ".local/bin/desktop-pet")
@@ -1075,9 +1359,11 @@ def cmd_uninstall(args):
     if is_on():
         host_set_enabled(False)
         print(acc("✓") + " pet turned off")
-    r = helper("dock-restore")
-    if r.get("restored"):
+    r = helper("restore-all")
+    if r.get("dock"):
         print(acc("✓") + " dock icons restored")
+    if r.get("wallpaper"):
+        print(acc("✓") + " wallpaper restored")
     for link in (BIN_LINK, COMP_LINK):
         if os.path.islink(link) and os.path.realpath(link).startswith(REPO_DIR):
             os.remove(link)
@@ -1117,7 +1403,9 @@ HELP = """{title} — a tiny pixel pet for your Omarchy desktop
   list                           show all pets with a tiny preview
   name <name>                    name the current pet (shown in its menu)
   feed                           toss a berry treat (no terminal text eaten)
-  heal                           restore all eaten / burned text and dock icons now
+  pet                            pet it (like a left-click)
+  heal                           undo everything now: eaten / burned text, skill effects,
+                                 dock icons, wallpaper
   wake                           wake the pet up (it sleeps 23:00-07:00)
   accessory <auto|none|NAME>     theme accessory; 'accessory list' shows names
   eat <on|off>                   allow eating letters from your terminal
@@ -1135,6 +1423,19 @@ HELP = """{title} — a tiny pixel pet for your Omarchy desktop
   new [-y]                       start over with a new egg (asks first)
   coffee                         support the project
 
+{k}
+  skills                         list skills (built-in, yours, pitched) with on/off
+  skills review                  look at what your pet pitched: preview once, approve, reject
+  skills enable|disable <id>     turn one skill on or off
+  skills on|off                  all skills (off = no skill activity at all)
+  skills pitch                   ask your pet to pitch a new skill now (Claude)
+  skills run <id>                run a skill once now (preview)
+  skills show <id>               what a skill does, step by step, and its recipe
+  skills remove <id>             delete one of your skills (built-ins: disable)
+  skills sound <on|off>          tiny synthesized skill sounds (default off)
+  skills hoard-label <text|off>  a label over the dragon's coin pile
+  Recipes: ~/.config/desktop-pet/skills/*.json (format: docs/SKILLS.md)
+
 {b}
   say "<message>"                talk to your pet; reply prints here and in its bubble
   chat                           interactive chat (Ctrl-D to exit)
@@ -1148,7 +1449,7 @@ HELP = """{title} — a tiny pixel pet for your Omarchy desktop
   setup [-y] [--buddy]           link the CLI + completion, add the SUPER+CTRL+P
                                  keybinding and kitty remote control (explains first);
                                  --buddy also installs the build-buddy shell hook
-  uninstall [--purge]            undo setup, turn the pet off, restore the dock
+  uninstall [--purge]            undo setup, turn the pet off, restore the dock and wallpaper
   config                         print config path and current settings
   reset [-y]                     restore default settings (asks first)
   help                           this help
@@ -1172,19 +1473,19 @@ State:    ~/.local/state/desktop-pet/ (stats, memory, dock backup)"""
 
 
 def cmd_help(_args):
-    print(HELP.format(title=acc("desktop-pet"), u=acc("Usage"), c=acc("Pet"), b=acc("Brain (Claude)"),
+    print(HELP.format(title=acc("desktop-pet"), u=acc("Usage"), c=acc("Pet"), k=acc("Skills"), b=acc("Brain (Claude)"),
                       s=acc("Settings"), p=acc("Privacy"), e=acc("Examples")))
     return 0
 
 
 COMMANDS = {
     "status": cmd_status, "on": cmd_on, "off": cmd_off, "toggle": cmd_toggle, "pick": cmd_pick,
-    "list": cmd_list, "name": cmd_name, "feed": cmd_feed, "heal": cmd_heal, "accessory": cmd_accessory,
+    "list": cmd_list, "name": cmd_name, "feed": cmd_feed, "pet": cmd_pet, "heal": cmd_heal, "accessory": cmd_accessory,
     "eat": cmd_eat, "goblin-steal": cmd_goblin_steal, "chatty": cmd_chatty, "brain": cmd_brain,
     "persona": cmd_persona, "theme-pet": cmd_theme_pet, "say": cmd_say, "chat": cmd_chat,
     "forget": cmd_forget, "config": cmd_config, "reset": cmd_reset, "help": cmd_help, "wake": cmd_wake,
     "poke": cmd_poke, "size": cmd_size, "color": cmd_color, "fetch": cmd_fetch, "buddy": cmd_buddy,
-    "evolve": cmd_evolve, "new": cmd_new, "coffee": cmd_coffee, "goblin-cmd": cmd_goblin, "setup": cmd_setup, "uninstall": cmd_uninstall,
+    "evolve": cmd_evolve, "skills": cmd_skills, "skill": cmd_skills, "new": cmd_new, "coffee": cmd_coffee, "goblin-cmd": cmd_goblin, "setup": cmd_setup, "uninstall": cmd_uninstall,
 }
 
 

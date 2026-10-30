@@ -24,6 +24,8 @@ PanelWindow {
   readonly property int radius: h && h.radius !== undefined ? h.radius : 0
   readonly property string font: pet.uiFont
   readonly property color dimFg: Qt.rgba(fg.r, fg.g, fg.b, 0.6)
+  readonly property var sk: pet.skillsRef
+  readonly property var mySkills: sk.forPet(pet.pet)
 
   function show() {
     card.petX = pet.posX + pet.sprLeft
@@ -264,6 +266,68 @@ PanelWindow {
           model: ["off", "low", "normal", "high"]
           Chip { required property string modelData; label: modelData; on: pet.cfg.chatty === modelData
                  onPicked: pet.setConfig("chatty", modelData) }
+        }
+      }
+      Rectangle { width: parent.width; height: 1; color: Qt.rgba(menu.fg.r, menu.fg.g, menu.fg.b, 0.15) }
+
+      // ---- skills
+      Row {
+        spacing: 4
+        Label { text: "skills" }
+        Chip { label: "on"; on: pet.cfg.skillsOn !== false; onPicked: pet.setConfig("skillsOn", true) }
+        Chip { label: "off"; on: pet.cfg.skillsOn === false; onPicked: pet.setConfig("skillsOn", false) }
+        Chip { label: "sound"; on: pet.cfg.skillSound === true; onPicked: pet.setConfig("skillSound", pet.cfg.skillSound !== true) }
+        Rectangle {
+          visible: menu.sk.pending.length > 0
+          anchors.verticalCenter: parent.verticalCenter
+          width: badgeText.implicitWidth + 10; height: badgeText.implicitHeight + 4
+          radius: height / 2
+          color: menu.selFg
+          Text { id: badgeText; anchors.centerIn: parent; text: menu.sk.pending.length + " new"
+                 color: menu.bg; font.family: menu.font; font.pixelSize: 10; font.bold: true }
+        }
+      }
+      Row {
+        spacing: 4
+        visible: menu.mySkills.length > 0
+        Label { text: "tricks" }
+        Flow {
+          width: col.width - 60
+          spacing: 4
+          Repeater {
+            model: menu.mySkills
+            Chip {
+              required property var modelData
+              label: modelData.recipe.name
+              on: pet.cfg.skillsOn !== false && menu.sk.enabled(modelData)
+              onPicked: {
+                var m = Object.assign({}, pet.cfg.skills || {})
+                m[modelData.id] = !menu.sk.enabled(modelData)
+                pet.setConfig("skills", m)
+              }
+            }
+          }
+        }
+      }
+      Column {
+        visible: menu.sk.pending.length > 0
+        width: parent.width
+        spacing: 4
+        readonly property var p: menu.sk.pending.length ? menu.sk.pending[0] : null
+        Text {
+          width: parent.width
+          wrapMode: Text.Wrap
+          textFormat: Text.PlainText
+          text: parent.p ? "pitch (" + parent.p.pet + "): \u201c" + parent.p.pitch + "\u201d  · " + parent.p.recipe.name : ""
+          color: menu.fg
+          font.family: menu.font; font.pixelSize: 10; font.italic: true
+        }
+        Row {
+          spacing: 4
+          Label { text: "" }
+          Chip { label: "try once"; onPicked: { var r = menu.sk.runNow(parent.parent.p.id); if (r !== "ok") pet.bubble(r); menu.hide() } }
+          Chip { label: "approve"; onPicked: menu.sk.decide(parent.parent.p.id, true) }
+          Chip { label: "reject"; onPicked: menu.sk.decide(parent.parent.p.id, false) }
         }
       }
       Rectangle { width: parent.width; height: 1; color: Qt.rgba(menu.fg.r, menu.fg.g, menu.fg.b, 0.15) }

@@ -3,7 +3,7 @@ _desktop_pet() {
   local cur prev cmds pets accs
   cur="${COMP_WORDS[COMP_CWORD]}"
   prev="${COMP_WORDS[1]}"
-  cmds="fetch buddy evolve new coffee size color setup uninstall status on off toggle pick list name feed heal wake accessory eat goblin-steal theme-pet poke say chat brain chatty persona forget config reset help slime cat dragon goblin"
+  cmds="skills pet fetch buddy evolve new coffee size color setup uninstall status on off toggle pick list name feed heal wake accessory eat goblin-steal theme-pet poke say chat brain chatty persona forget config reset help slime cat dragon goblin"
   pets="slime cat dragon goblin"
   accs="auto none list shades visor retroshades glow crown leafhat pumpkin beanie mushroom halo flower bow moonstars scarf headband tie gem"
   if (( COMP_CWORD == 1 )); then
@@ -30,6 +30,19 @@ _desktop_pet() {
       elif (( COMP_CWORD == 3 )); then COMPREPLY=( $(compgen -W "baby teen adult elder" -- "$cur") )
       else COMPREPLY=( $(compgen -W "classic cyber chonk" -- "$cur") ); fi ;;
     uninstall) COMPREPLY=( $(compgen -W "--purge" -- "$cur") ) ;;
+    skills|skill)
+      if (( COMP_CWORD == 2 )); then
+        COMPREPLY=( $(compgen -W "list review enable disable on off pitch run preview show remove approve reject sound hoard-label" -- "$cur") )
+      elif (( COMP_CWORD == 3 )); then
+        local ids pend
+        case "${COMP_WORDS[2]}" in
+          sound) COMPREPLY=( $(compgen -W "on off" -- "$cur") ) ;;
+          hoard-label) COMPREPLY=( $(compgen -W "off" -- "$cur") ) ;;
+          enable|disable|run|preview|show|remove|approve|reject)
+            ids=$(desktop-pet skills ids "${COMP_WORDS[2]}" 2>/dev/null)
+            COMPREPLY=( $(compgen -W "$ids" -- "$cur") ) ;;
+        esac
+      fi ;;
     theme-pet)
       if (( COMP_CWORD == 2 )); then
         COMPREPLY=( $(compgen -W "$(ls /usr/share/omarchy/themes ~/.config/omarchy/themes 2>/dev/null | grep -v : | sort -u)" -- "$cur") )
