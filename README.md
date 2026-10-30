@@ -8,7 +8,8 @@
 omarchy plugin add https://github.com/3thanD/desktop-pet.git --enable
 ```
 
-![Desktop pet hopping over to btop](docs/demo.png) <!-- hero shot: record with tools/make-media.sh (docs/hero.png + GIFs), then point this at docs/hero.png -->
+<p align="center"><img src="docs/evolve.gif" alt="A slime growing up through its evolution stages" width="420"></p>
+<!-- desktop recordings (hero.png, eat/dragon/goblin GIFs + MP4s): run tools/make-media.sh on an unlocked desktop, then add them here -->
 
 An egg appears on your desktop and hatches into a slime (or a cat, a baby dragon or a goblin).
 It wanders around, gets hungry, hops over to your terminal and nibbles letters right off the
@@ -105,6 +106,8 @@ Accessories per theme: shades and a green glow (Hackerman), a visor (Tokyo Night
 (Gruvbox), a monochrome look (Matte Black, Vantablack, White), and more; custom themes get a bow.
 
 ![The slime across Omarchy themes, and complement mode](docs/themes.png)
+
+<p align="center"><img src="docs/themes.gif" alt="The slime recoloring across themes" width="360"></p>
 
 `desktop-pet color complement` rotates the theme's colors to the opposite side of the color wheel
 (kept at least 3:1 contrast with the background), and `desktop-pet color custom '#ff8800'` picks
@@ -247,6 +250,13 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) and open an issue to say what you're port
 - **The goblin doesn't move icons:** that needs `nwg-dock-hyprland` with pinned apps; without it the
   goblin only pretends. A journal is written before the dock is touched, so `off`, `heal`, a reload
   or a crash always puts the icons back.
+
+## Making the demo media
+
+The images above are rendered from the real sprite data (`node tools/render-sprites.js docs --frames`).
+`tools/make-media.sh` records desktop clips (hero shot, eating btop, dragon fire, goblin heist,
+evolution, theme changes) with grim/gpu-screen-recorder and ffmpeg, and restores your pet and
+theme afterwards.
 
 ## Support
 

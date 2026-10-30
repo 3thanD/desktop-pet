@@ -62,4 +62,34 @@ themes.concat(["hackerman"]).forEach((t, i) => {
        S.palette("slime", tc, !!info.mono, mode), x0 + GAP / 2, GAP, CELL)
 })
 save(cv, path.join(outDir, "themes.ppm"))
-console.log("wrote pets.ppm and themes.ppm to " + outDir)
+
+// Animated previews (frames as PPM; tools/make-media.sh or ffmpeg turn them into GIFs):
+//   evolve-NNN.ppm  the slime growing through every stage, with a flash between stages
+//   themes-NNN.ppm  the slime recoloring across themes
+if (process.argv.includes("--frames")) {
+  const W = 3 * BOX, H = BOX + 2 * GAP
+  let n = 0
+  const frame = (cv, name) => save(cv, path.join(outDir, `${name}-${String(n++).padStart(3, "0")}.ppm`))
+  const seq = [[1, "classic"], [2, "classic"], [3, "classic"], [3, "cyber"], [3, "chonk"], [4, "classic"]]
+  seq.forEach(([st, v]) => {
+    for (let f = 0; f < 10; f++) {
+      const c = canvas(W, H, hk.background)
+      const cell = st === 1 ? S.babyPx(CELL * 2) : CELL * 2, size = S.GRID_W * cell
+      draw(c, S.buildGrid("slime", { stage: st, variant: v, acc: S.accessoriesFor("hackerman", "auto"), frame: f % 4 < 2 ? 0 : 1 }),
+           S.palette("slime", hk, false, "theme"), (W - size) / 2, H - size - GAP / 2, cell)
+      if (f < 3) for (let i = 0; i < c.w * c.h; i++) blend(c, i % c.w, Math.floor(i / c.w), [255, 255, 255], 0.5 - f * 0.15)
+      frame(c, "evolve")
+    }
+  })
+  n = 0
+  themes.forEach((t) => {
+    const tc = themeTc(t), info = S.themeInfo(t)
+    for (let f = 0; f < 8; f++) {
+      const c = canvas(W, H, tc.background)
+      draw(c, S.buildGrid("slime", { stage: 3, acc: S.accessoriesFor(t, "auto"), band: info.band || "r", frame: f % 4 < 2 ? 0 : 1 }),
+           S.palette("slime", tc, !!info.mono, "theme"), (W - BOX * 2) / 2, H - BOX * 2 - GAP / 2, CELL * 2)
+      frame(c, "themes")
+    }
+  })
+}
+console.log("wrote sprite renders to " + outDir)
