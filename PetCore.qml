@@ -29,7 +29,8 @@ Item {
 
   // ---------------------------------------------------------------- config
   property var cfg: ({ pet: "slime", names: {}, accessory: "auto", eat: true, goblinSteal: true,
-                       chatty: "low", brain: true, brainContext: false, themePets: {}, size: 100, color: "theme", fetch: true, buddy: true })
+                       chatty: "low", brain: true, brainContext: false, themePets: {}, size: 100, color: "theme", fetch: true, buddy: true,
+                       skillsOn: true, skills: {}, skillSound: false, hoardLabel: "" })
 
   // ---- from the host (or fallbacks)
   readonly property string themeName: host ? host.themeName : ""
@@ -100,6 +101,15 @@ Item {
   property var heist: null              // {mode, id, returnAt}
   property bool dockInstalled: true
   property int zstep: 0
+  // set by the skills engine (PetSkills.qml)
+  property real speedMul: 1            // walking speed factor
+  property real fxX: 0                 // sprite offset (wiggle / swat)
+  property real squash: 1              // sprite vertical scale
+  property bool hideSprite: false      // mitosis: the clones are on screen instead
+  property bool clickThrough: false    // cursor sit: no input mask at all
+  property int shakeX: 0               // drawn screen-shake offsets
+  property int shakeY: 0
+  readonly property var storeObj: store
 
   // Size: whole-pixel multiples keep the art crisp (50/100/200% = 2/4/8 px per art pixel).
   readonly property int sizePct: [50, 100, 200].indexOf(Number(cfg.size)) >= 0 ? Number(cfg.size) : 100
@@ -219,12 +229,15 @@ Item {
     try { c = JSON.parse(raw || "{}") } catch (e) { return }
     var oldPet = pet
     var oldSteal = cfg.goblinSteal
+    var oldSkills = cfg.skillsOn !== false
     var n = { pet: "slime", names: {}, accessory: "auto", eat: true, goblinSteal: true,
-              chatty: "low", brain: true, brainContext: false, themePets: {}, size: 100, color: "theme", fetch: true, buddy: true }
+              chatty: "low", brain: true, brainContext: false, themePets: {}, size: 100, color: "theme", fetch: true, buddy: true,
+              skillsOn: true, skills: {}, skillSound: false, hoardLabel: "" }
     for (var k in n) if (c[k] !== undefined && c[k] !== null) n[k] = c[k]
     cfg = n
     if (pet !== oldPet) petSwitched(oldPet)
-    if (oldSteal && !cfg.goblinSteal) endHeist(true)
+    if (oldSteal && !cfg.goblinSteal) { endHeist(true); if (skills.dockFx) skills.returnDock("off") }
+    if (oldSkills && cfg.skillsOn === false) skills.revertAll()
     sprite.requestPaint()
   }
 
@@ -241,6 +254,7 @@ Item {
 
   function openMenu() {
     // pause: stop walking (a heist keeps its journal and return timer)
+    if (skills.busy) skills.abort("menu")
     if (mode === "walk") { moveTimer.stop(); goal = null; arrive = null; task = ""; hopY = 0; mode = "idle" }
     bubbleText = ""
     menuWin.show()
@@ -259,6 +273,7 @@ Item {
 
   function petSwitched(oldPet) {
     if (oldPet === "goblin") endHeist(true)
+    skills.revertAll()
     resetActivity()
     if (store.ready) {
       if (!egg) store.doc.pets[oldPet] = recordOf()   // each species keeps its own save
@@ -281,6 +296,7 @@ Item {
     stateLoaded = true
     if (store.recovered === "bak") logEvent("woke up a bit confused (state restored from backup)")
     enterSpecies(pet, d.savedAt || 0)
+    skills.syncFromStore()
     if (store.migrated || store.recovered !== "") saveSoon()
   }
 
@@ -335,7 +351,7 @@ Item {
       hunger: Math.round(hunger), happiness: Math.round(happiness), energy: Math.round(energy),
       stage: stage, stageName: stageName, variant: variant, ageDays: Math.floor(ageDays), meals: meals,
       lettersEaten: lettersEaten, careDays: careDays, plays: plays,
-      theme: themeName, accessory: acc.join(","), patches: patches.length,
+      theme: themeName, accessory: acc.join(","), patches: patches.length, skills: skills.statusObj(),
       heist: heist, target: target ? target.cls : "", x: Math.round(posX), y: Math.round(posY), savedAt: now() }
   }
 
@@ -475,6 +491,8 @@ Item {
       nextChatAt = t + chatGapMs() * rnd(0.8, 1.3)
       talk("auto", "", true, true)
     }
+    skills.tick()
+    if (mode !== "idle") return
     if (Math.random() < 0.06) wander()
   }
 
@@ -621,6 +639,7 @@ Item {
   }
 
   function resetActivity() {
+    if (skills.busy && skills.run.seized && (mode === "skill" || task === "skill")) skills.abort("interrupted")
     moveTimer.stop(); chompTimer.stop(); fireAnim.stop()
     goal = null; arrive = null; task = ""; mouthOpen = false; hopY = 0
     pendingRun = null
@@ -633,6 +652,7 @@ Item {
     if (heist && heist.mode === "hide") { tx = rnd(0, screenW - winW); ty = rnd(screenH * 0.45, screenH - winH) }
     else { tx = clamp(posX + rnd(-450, 450), 0, screenW - winW); ty = clamp(posY + rnd(-220, 220), 0, screenH - winH) }
     walkTo(tx, ty, "wander", function () { mode = "idle" })
+    skills.onWalk()
   }
 
   function walkTo(x, y, why, cb) {
@@ -650,7 +670,7 @@ Item {
     if (!goal) { moveTimer.stop(); return }
     var speed = pet === "slime" ? 6 : pet === "cat" ? 7 : pet === "dragon" ? 8 : 9
     if (heist && carryIcon) speed = Math.max(5, speed - 2)
-    speed = speed * (0.5 + 0.5 * k) * 1.3   // keep ~the old 20 fps velocity
+    speed = speed * (0.5 + 0.5 * k) * 1.3 * speedMul   // keep ~the old 20 fps velocity
     var dx = goal.x - posX, dy = goal.y - posY
     var d = Math.sqrt(dx * dx + dy * dy)
     stepCount++
@@ -677,7 +697,7 @@ Item {
   // ---------------------------------------------------------------- eating
   function startMeal() {
     nextFoodTry = now() + 3 * 60000
-    if (pet === "goblin" && cfg.goblinSteal && !heist) { startHeist(); return }
+    if (pet === "goblin" && cfg.goblinSteal && !heist && !skills.dockBusy) { startHeist(); return }
     if (!cfg.eat) { giveTreat(15, false); return }
     scanProc.purpose = "eat"
     if (!runHelper(scanProc, ["scan"])) return
@@ -692,6 +712,24 @@ Item {
     task = "scan"
   }
 
+  // the skills engine borrows the scanner (cat knock-off)
+  function skillScan() {
+    scanProc.purpose = "skill"
+    return runHelper(scanProc, ["scan"])
+  }
+  // remember a scanned terminal as the overlay target (patches follow it)
+  function adoptTarget(r) {
+    if (r.monitor && r.monitor !== screenName) moveToScreen(r.monitor)
+    var tgt = { address: r.address, cls: r["class"], x: r.x, y: r.y, w: r.w, h: r.h,
+                cw: r.cw, ch: r.ch, ox: r.ox, oy: r.oy, cols: r.cols, rows: r.rows,
+                monitor: r.monitor || screenName, font: r.font || "monospace", fontPx: r.fontPx || 12 }
+    if (target && target.address !== tgt.address)
+      patches = patches.filter(function (p) { return p.addr === tgt.address })   // one terminal at a time
+    target = tgt
+    targetVisible = true
+    return tgt
+  }
+
   function mouthPx() {
     var m = Sprites.mouthCell(pet)
     return [artX + m[0] * cellPx, artY + m[1] * cellPx + cellPx / 2]
@@ -700,22 +738,14 @@ Item {
   function onScan(purpose, raw) {
     var r = null
     try { r = JSON.parse(raw) } catch (e) {}
+    if (purpose === "skill") { skills.onScan(r); return }
     mode = "idle"; task = ""
     if (!r || !r.ok) {
       if (r && r.reason) showHint(r.reason, r.terminals)
       if (purpose === "eat") giveTreat(10, false)   // nothing to eat on screen: a berry will do
       return
     }
-    if (r.monitor && r.monitor !== screenName) moveToScreen(r.monitor)
-    var tgt = { address: r.address, cls: r["class"], x: r.x, y: r.y, w: r.w, h: r.h,
-                cw: r.cw, ch: r.ch, ox: r.ox, oy: r.oy, cols: r.cols, rows: r.rows,
-                monitor: r.monitor || screenName, font: r.font || "monospace", fontPx: r.fontPx || 12 }
-    if (target && target.address !== tgt.address) {
-      // keep at most one terminal decorated at a time
-      patches = patches.filter(function (p) { return p.addr === tgt.address })
-    }
-    target = tgt
-    targetVisible = true
+    var tgt = adoptTarget(r)
     var mp = mouthPx()
     var taken = {}
     for (var i = 0; i < patches.length; i++) taken[patches[i].row + ":" + patches[i].col] = true
@@ -993,6 +1023,7 @@ Item {
     ignoredLogged = false
     happiness = clamp(happiness + 8, 0, 100)
     hearts.burst()
+    if (skills.onPetted()) return   // paying the goblin's ransom
     var useClaude = now() - lastClaudeClick > clickGapMs() && cfg.chatty !== "off"
     if (useClaude) lastClaudeClick = now()
     talk("click", "got petted by my human", true, useClaude)
@@ -1042,6 +1073,7 @@ Item {
   }
 
   function healAll() {
+    skills.revertAll()
     patches = []
     if (mode === "eat" || mode === "fire") resetActivity()
     if (heist || carryIcon) { resetActivity(); endHeist(true) }
@@ -1145,7 +1177,9 @@ Item {
   property real lastBuddyFail: 0
   readonly property var testCmds: ["pytest", "cargo test", "npm test", "go test", "make test", "yarn test", "pnpm test", "bun test"]
   function onCommand(cmd, code, dur) {
-    if (!cfg.buddy || egg || sleeping || !cmd) return
+    if (!cfg.buddy || egg || !cmd) return
+    if (code === 0) skills.onCommandOk()
+    if (sleeping) return
     var t = now()
     if (t - lastBuddy < 20000 || code === 130) return
     var trig = "", ev = ""
@@ -1189,6 +1223,7 @@ Item {
     target: "desktoppet"
     function heal(): string { root.healAll(); return "ok" }
     function feed(): string { root.giveTreat(20, true); return "ok" }
+    function pat(): string { root.petPet(); return "ok" }
     function wake(): string { if (root.sleeping) root.wakeUp(true); else root.wakeUntil = root.now() + 20 * 60000; return "ok" }
     function hungry(): string {
       if (root.sleeping) root.wakeUp(true)
@@ -1226,6 +1261,9 @@ Item {
     function newEgg(): string { root.newEgg(); return "ok" }
     function menu(): string { root.openMenu(); return "ok" }
     function fetch(): string { if (root.egg) return "still an egg"; return root.fetch() ? "ok" : "fetch is off" }
+    function runSkill(id: string): string { return skills.runNow(id) }
+    function skillsReload(): string { skills.reload(); return "ok" }
+    function skillsStatus(): string { return JSON.stringify(skills.statusObj()) }
     function buddyTest(cmd: string, code: string, dur: string): string { root.lastBuddy = 0; root.lastBuddyFail = 0; root.onCommand(cmd, Number(code), Number(dur)); return "ok" }
   }
 
@@ -1234,11 +1272,25 @@ Item {
   Timer { interval: 400; running: true; onTriggered: root.petMapped = true }
 
   Component.onCompleted: {
-    // never leave the dock modified from a previous session
+    // never leave the dock or the wallpaper modified from a previous session
     dockProc.purpose = "restore"
-    runHelper(dockProc, ["dock-restore"])
+    runHelper(dockProc, ["restore-all"])
   }
-  Component.onDestruction: saveState()
+  Component.onDestruction: {
+    saveState()
+    // plugin disabled / shell reloading mid-skill: put the desktop back even though we're going away
+    if (skills.dockFx || skills.wallFx || heist) Quickshell.execDetached(["python3", "-I", helper, "restore-all"])
+  }
+
+  // helpers for the skills engine
+  function requestPaint() { sprite.requestPaint() }
+  function sparkle() { evoFx.sparkle() }
+  function heartBurst() { hearts.burst() }
+  function fxBurst(kind, count, color) { pfx.burst(kind, count, color) }
+  function tintPet(color, op, sec) { petTint.show(color, op, sec) }
+
+  // skills engine; declared before the pet window so its fx overlay stacks below the pet
+  PetSkills { id: skills; pet: root }
 
   // ================================================================ windows
 
@@ -1286,7 +1338,7 @@ Item {
     visible: root.petMapped && root.petScreen !== null
     screen: root.petScreen
     anchors { top: true; left: true }
-    margins { left: Math.round(root.posX); top: Math.max(0, Math.round(root.posY + root.hopY)) }
+    margins { left: Math.max(0, Math.round(root.posX) + root.shakeX); top: Math.max(0, Math.round(root.posY + root.hopY) + root.shakeY) }
     implicitWidth: root.winW
     implicitHeight: root.winH
     color: "transparent"
@@ -1294,9 +1346,9 @@ Item {
     WlrLayershell.layer: WlrLayer.Top
     WlrLayershell.keyboardFocus: WlrKeyboardFocus.None
     exclusionMode: ExclusionMode.Ignore
-    mask: Region {
-      item: hitBox
-    }
+    mask: root.clickThrough ? noInput : petInput
+    Region { id: petInput; item: hitBox }
+    Region { id: noInput }
 
     Item {
       id: hitBox
@@ -1306,12 +1358,32 @@ Item {
       height: root.spr - y + root.sprTop
     }
 
+    // soft tint wash behind the pet (skill "tint", area pet)
+    Rectangle {
+      id: petTint
+      property real until: 0
+      property real op: 0
+      visible: opacity > 0
+      width: root.spr * 1.6; height: width; radius: width / 2
+      x: root.sprLeft + root.spr / 2 - width / 2
+      y: root.sprTop + root.spr * 0.6 - height / 2
+      opacity: 0
+      function show(c, o, sec) {
+        color = c; op = o
+        if (sec <= 0) { opacity = 0; tintOff.stop(); return }
+        opacity = o; tintOff.interval = sec * 1000; tintOff.restart()
+      }
+      Timer { id: tintOff; onTriggered: petTint.opacity = 0 }
+    }
+
     Canvas {
       id: sprite
-      x: root.sprLeft
+      visible: !root.hideSprite
+      x: root.sprLeft + root.fxX
       y: root.sprTop + ((root.pet === "slime" && root.frame === 1 && root.mode !== "walk") ? root.cellPx : 0)
       width: root.spr
       height: root.spr
+      transform: Scale { origin.x: root.spr / 2; origin.y: root.spr; yScale: root.squash; xScale: 2 - root.squash }
       renderStrategy: Canvas.Immediate
       onPaint: {
         var ctx = getContext("2d")
@@ -1493,6 +1565,60 @@ Item {
           x: root.sprLeft + mp[0] + (index - 1.5) * 6 * crumbs.t
           y: sprite.y + mp[1] + 4 + crumbs.t * crumbs.t * 30 - (index % 2) * 6 * crumbs.t
           opacity: 1 - crumbs.t
+        }
+      }
+    }
+
+    // skill particles: one closed-form burst at ~15 fps for 1.2 s
+    Item {
+      id: pfx
+      anchors.fill: parent
+      property real t: 1
+      property string kind: ""
+      property color col: "white"
+      property var parts: []
+      visible: t < 1
+      function burst(k, n, c) {
+        var list = []
+        for (var i = 0; i < n; i++)
+          list.push({ a: Math.random() * Math.PI * 2, v: 20 + Math.random() * 40, up: 10 + Math.random() * 30, s: 0.7 + Math.random() * 0.6 })
+        kind = k; col = c; parts = list; t = 0
+        pfxTimer.restart()
+      }
+      Timer { id: pfxTimer; interval: 66; repeat: true; onTriggered: { pfx.t = Math.min(1, pfx.t + 0.055); if (pfx.t >= 1) stop() } }
+      Repeater {
+        model: pfx.visible ? pfx.parts : []
+        Item {
+          required property var modelData
+          readonly property real kk: Math.max(0.6, root.k)
+          readonly property real sz: Math.round((pfx.kind === "smoke" ? 6 + pfx.t * 10 : 5) * kk * modelData.s)
+          x: root.sprLeft + root.spr / 2 + Math.cos(modelData.a) * modelData.v * pfx.t * kk - sz / 2
+          y: root.sprTop + root.spr * 0.45 + (Math.sin(modelData.a) * modelData.v * 0.6 - modelData.up) * pfx.t * kk
+             + (pfx.kind === "coins" || pfx.kind === "pixels" ? 40 * pfx.t * pfx.t * kk : 0) - sz / 2
+          width: sz; height: sz
+          opacity: 1 - pfx.t * pfx.t
+          Rectangle {
+            anchors.fill: parent
+            visible: pfx.kind === "coins" || pfx.kind === "pixels" || pfx.kind === "bubbles" || pfx.kind === "smoke"
+            radius: pfx.kind === "pixels" ? 0 : width / 2
+            color: pfx.kind === "bubbles" ? "transparent" : (pfx.kind === "smoke" ? Qt.rgba(0.6, 0.6, 0.6, 0.6) : pfx.col)
+            border.width: pfx.kind === "bubbles" || pfx.kind === "coins" ? Math.max(1, Math.round(parent.kk)) : 0
+            border.color: pfx.kind === "coins" ? Qt.darker(pfx.col, 1.6) : pfx.col
+          }
+          Item {
+            anchors.fill: parent
+            visible: pfx.kind === "sparkles" || pfx.kind === "stars"
+            rotation: pfx.kind === "stars" ? 45 : 0
+            Rectangle { x: parent.width / 2 - width / 2; width: Math.max(2, parent.width / 3); height: parent.height; color: pfx.col }
+            Rectangle { y: parent.height / 2 - height / 2; height: Math.max(2, parent.height / 3); width: parent.width; color: pfx.col }
+          }
+          Text {
+            anchors.centerIn: parent
+            visible: pfx.kind === "hearts" || pfx.kind === "notes"
+            text: pfx.kind === "hearts" ? "\u2665" : "\u266a"
+            color: pfx.col
+            font.pixelSize: parent.sz * 2
+          }
         }
       }
     }

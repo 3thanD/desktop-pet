@@ -602,3 +602,45 @@ function palette(pet, tc, mono, colorMode) {
   }
   return p
 }
+
+// ------------------------------------------------------------ skills
+
+// Draw a character grid (palette roles) at `s` px per cell; used by clones and doodles.
+function drawGrid(ctx, g, p, s, flip) {
+  var w = 0
+  for (var r = 0; r < g.length; r++) w = Math.max(w, g[r].length)
+  for (var y = 0; y < g.length; y++) {
+    for (var x = 0; x < g[y].length; x++) {
+      var c = g[y][x]
+      if (c === "." || c === " ") continue
+      var gx = flip ? (w - 1 - x) : x
+      ctx.globalAlpha = c === "*" ? 0.35 : 1
+      ctx.fillStyle = p[c] || "#ff00ff"
+      ctx.fillRect(gx * s, y * s, s, s)
+    }
+  }
+  ctx.globalAlpha = 1
+}
+
+// Built-in doodles for the "doodle" skill action (palette roles as above).
+var DOODLES = {
+  "heart": [
+    ".rr...rr.", "rrrr.rrrr", "rrwrrrrrr", "rrrrrrrrr", ".rrrrrrr.", "..rrrrr..", "...rrr...", "....r...."],
+  "crown": [
+    "y...y...y", "yy.yyy.yy", "yyyyyyyyy", "yrryvyrry", "yyyyyyyyy"],
+  "paw": [
+    ".bb...bb.", ".bb...bb.", "....b....", "bb.....bb", "bb.bbb.bb", "..bbbbb..", "..bbbbb..", "...bbb..."],
+  "skull-and-coins": [
+    "..wwwww..", ".wwwwwww.", ".wkwwwkw.", ".wwwkwww.", "..wwwww..", "..w.w.w..", ".........", "yy.yy.yy.", "yyyyyyyyy"],
+  "goblin-was-here": [
+    "ccccccccccccccccccccccccc", "cwwwwwwwwwwwwwwwwwwwwwwwc",
+    "cwgggwgggwggwwgwwwgwgwwgc", "cwgwwwgwgwgwgwgwwwgwggwgc", "cwgwgwgwgwggwwgwwwgwgggwc",
+    "cwgggwgggwggwwgggwgwgwggc", "cwwwwwwwwwwwwwwwwwwwwwwwc",
+    "cwrwrwwrwwwrrwwwrwrwrrrwc", "cwrwrwrwrwrwwwwwrrrwrrwwc", "cwrrrwrrrwwrwwwwrwrwrrrwc",
+    "cwwwwwwwwwwwwwwwwwwwwwwwc", "ccccccccccccccccccccccccc", "..........cc..cc.........", "..........cc..cc........."],
+  "slime-was-here": [
+    "......aaaa......", "....aahhhaaa....", "...aahaaaaaaa...", "..aaawkaaawkaa..",
+    "..aaakkaaakkaaa.", "..aaaaaammaaaaa.", "...aaaaaaaaaaa..", "....a..a...a....", "....a......a....", ".......a........"]
+}
+
+function doodle(name) { return DOODLES[String(name || "")] || null }
