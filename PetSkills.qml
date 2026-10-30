@@ -109,8 +109,8 @@ Item {
   Component.onCompleted: reload()
 
   // ------------------------------------------------------------ rate limits + triggers
-  function canRun(s, t) {
-    if (!on || !enabled(s) || pet.egg || pet.sleeping || pet.menuOpen) return false
+  function canRun(s, t, sleepOk) {
+    if (!on || !enabled(s) || pet.egg || pet.menuOpen || (pet.sleeping && !sleepOk)) return false
     var r = s.recipe, L = sdoc().log[s.id] || {}
     if (L.last && t - L.last < num(r.cooldown, 1, 1440, 30) * 60000) return false
     if (r.maxPerDay && L.day === dayKey() && (L.n || 0) >= r.maxPerDay) return false
@@ -156,7 +156,8 @@ Item {
     var t = now(), list = forPet(pet.pet)
     for (var i = 0; i < list.length; i++) {
       var s = list[i], tr = s.recipe.trigger
-      if (tr.on !== kind || !canRun(s, t)) continue
+      // a sleeping dragon still counts its coins (recipes that don't move the pet)
+      if (tr.on !== kind || !canRun(s, t, kind === "command-ok" && !seizes(s.recipe))) continue
       if (kind === "milestone" && extra % Math.max(1, Math.round(num(tr.min, 1, 1440, 10))) !== 0) continue
       if (Math.random() >= num(tr.chance, 0, 1, 1)) continue
       if (kind === "walk" && seizes(s.recipe)) continue      // the pet is busy walking

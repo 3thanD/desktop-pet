@@ -1280,7 +1280,8 @@ Item {
   Component.onDestruction: {
     saveState()
     // plugin disabled / shell reloading mid-skill: put the desktop back even though we're going away
-    if (skills.dockFx || skills.wallFx || heist) Quickshell.execDetached(["python3", "-I", helper, "restore-all"])
+    // (a no-op without journals; the next load restores too)
+    Quickshell.execDetached(["python3", "-I", helper, "restore-all"])
   }
 
   // helpers for the skills engine
