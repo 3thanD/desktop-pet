@@ -1,6 +1,37 @@
 # Changelog
 
-## 0.1.0 (unreleased)
+## 0.2.0 (unreleased)
+
+### Pet skills
+- A skills system: tricks are small declarative JSON recipes (`docs/skill.schema.json`,
+  `docs/SKILLS.md`) built only from a fixed list of approved actions (move/hop/path, frame sets,
+  speech bubbles, particles, trails, tint, a drawn screen-shake, falling-glyph physics, doodles,
+  optional sounds, a journaled dock or wallpaper change, mini clones, a coin hoard). Recipes are
+  validated against the schema; unknown actions or fields, command/path/URL-like text,
+  over-long durations, unsafe doodle paths and oversized files are rejected.
+- Hard caps everywhere: a run stops after 120 s, every effect has its own expiry and reverts by
+  itself; `heal`, `off`, `uninstall`, `skills off` and switching pets revert everything at once.
+  The dock icon and the wallpaper are journaled before they change and restored on load, crash,
+  reload and when the plugin is disabled.
+- Eight built-in skills, each toggleable, rate-limited, theme-colored and size-aware:
+  slime **trail** and **mitosis**, cat **cursor-sit** (never blocks clicks) and **knock-off**
+  (a letter falls off btop and shatters; the hole heals), dragon **hoard** (a tiny persistent
+  coin pile, optional `hoardLabel`) and **roar**, goblin **wallpaper-heist** and **ransom**.
+- Pets pitch skills: with the brain on, at most once a day, the pet asks Claude in character
+  for a new recipe and a one-line pitch. It is validated, tamed and queued; never auto-enabled.
+- User skills and shareable skill packs in `~/.config/desktop-pet/skills/` (off until enabled).
+- CLI: `desktop-pet skills` (list), `skills review` (preview once / approve / reject),
+  `skills enable|disable|on|off|pitch|run|show|remove|sound|hoard-label`, and `desktop-pet pet`.
+  Bash completion for all of it.
+- Right-click menu: a Skills section with a pending-pitch badge, try / approve / reject, a toggle
+  for each of the current pet's skills, and skill sounds.
+
+### Changed
+- `heal`, `off` and `uninstall` also stop skills and restore the wallpaper.
+- The build buddy counts successful commands for the dragon's hoard even while the pet sleeps
+  (reactions still wait until it is awake).
+
+## 0.1.0
 
 First public release.
 

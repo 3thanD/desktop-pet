@@ -38,6 +38,7 @@ and slowly grows up: baby, teen, adult (shaped by what it eats) and, for the bes
 | **Theme-aware** | recolors live with `omarchy theme set`, a little accessory per theme, a complementary-color mode and custom colors |
 | **Fetch** | throw a ball, or grab and flick it with the mouse; the pet chases it and brings it back |
 | **Build buddy** | optional shell hook: winces at failed commands, cheers passing tests, dances on `git push` |
+| **Skills** | eight built-in tricks (slime trail and mitosis, cat cursor-sit and knock-off, dragon hoard and roar, goblin wallpaper heist and ransom), your own JSON recipes, and new ones your pet pitches through Claude for you to approve |
 | **A brain (optional)** | short in-character lines through your own Claude Code CLI, tools disabled, rate-limited, canned lines offline |
 | **Right-click menu** | every setting, stats with age, "say something", feed, fetch, heal, turn off |
 | **A friendly CLI** | `desktop-pet` with colored stat bars, previews and tab completion |
@@ -45,9 +46,9 @@ and slowly grows up: baby, teen, adult (shaped by what it eats) and, for the bes
 
 ## Compatibility
 
-- **v0.1 supports Omarchy (Hyprland) only.** It is an Omarchy shell plugin and uses Hyprland for
+- **Desktop Pet supports Omarchy (Hyprland) only for now.** It is an Omarchy shell plugin and uses Hyprland for
   window and monitor information.
-- A standalone mode for plain Hyprland (no Omarchy) is planned for v0.2.0
+- A standalone mode for plain Hyprland (no Omarchy) is planned
   ([docs/STANDALONE.md](docs/STANDALONE.md)).
 - GNOME is not supported (no layer-shell). Sway, niri and KDE can be added as adapters.
 - Letter-eating needs kitty (Omarchy's btop runs in kitty). Multiple monitors and fractional
@@ -140,14 +141,16 @@ paths or output. Turn reactions off with `desktop-pet buddy off`; remove the hoo
 ```
 desktop-pet                    status: pet, age, stage, stats, accessory
 
-on | off | toggle              show / remove the pet (off removes every overlay
-                               instantly, restores the dock). Key: SUPER+CTRL+P
+on | off | toggle              show / remove the pet (off removes every overlay and
+                               skill effect, restores the dock and wallpaper). Key: SUPER+CTRL+P
 pick <slime|cat|dragon|goblin> choose your pet (shortcut: desktop-pet cat)
 list                           all pets with a tiny preview
 name <name>                    name the current pet
 feed                           toss a berry treat
+pet                            pet it (like a left-click)
 fetch [on|off]                 throw a ball; on/off allows play
-heal                           restore all eaten / burned text and dock icons now
+heal                           undo everything now: eaten / burned text, skill
+                               effects, dock icons, wallpaper
 wake                           wake the pet up
 size <50|100|200>              pet size in percent (crisp pixel steps)
 color <theme|complement|custom #hex>
@@ -160,6 +163,13 @@ new [-y]                       start over with a new egg
 theme-pet <theme> <pet|off>    optional: a specific pet on one theme
 poke <hungry|fire|heist>       make it eat / breathe fire / steal right now
 
+skills                         list skills with on/off (built-in, yours, pitched)
+skills review                  preview once / approve / reject what your pet pitched
+skills enable|disable <id>     one skill on or off; skills on|off for all of them
+skills pitch | run <id> | show <id> | remove <id>
+skills sound <on|off>          tiny skill sounds (default off)
+skills hoard-label <text|off>  a label over the dragon's coin pile
+
 say "<message>"                talk to your pet (reply here and in its bubble)
 chat                           interactive chat (Ctrl-D to exit)
 brain <on|off>                 off = canned lines only, zero Claude calls
@@ -169,7 +179,7 @@ persona "<text>" | reset       override the personality
 forget                         clear its short memory
 
 setup [-y] [--buddy]           CLI link, completion, keybinding, kitty, buddy hook
-uninstall [--purge]            undo setup, turn off, restore the dock
+uninstall [--purge]            undo setup, turn off, restore the dock and wallpaper
 config | reset [-y] | coffee | help
 ```
 
@@ -185,7 +195,8 @@ corrupt file is kept aside and the backup is used. Nothing is stored in the plug
 {
  "pet": "slime", "names": { "slime": "Pixel" }, "size": 100, "color": "theme",
  "accessory": "auto", "eat": true, "goblinSteal": true, "fetch": true, "buddy": true,
- "chatty": "low", "brain": true, "brainContext": false, "persona": {}, "themePets": {}
+ "chatty": "low", "brain": true, "brainContext": false, "persona": {}, "themePets": {},
+ "skillsOn": true, "skills": { "ransom": false }, "skillSound": false, "hoardLabel": ""
 }
 ```
 
@@ -213,10 +224,11 @@ lines and makes **zero** Claude calls.
 
 ## Turning it off and uninstalling
 
-- **Off:** `desktop-pet off`, SUPER+CTRL+P, or menu → *turn off*. Every overlay disappears and any
-  borrowed dock icon is put back. `desktop-pet on` brings it back.
+- **Off:** `desktop-pet off`, SUPER+CTRL+P, or menu → *turn off*. Every overlay and skill effect
+  disappears, any borrowed dock icon is put back and the wallpaper is restored. `desktop-pet on` brings it back.
 - **Undo setup:** `desktop-pet uninstall` removes the CLI and completion links, the keybinding,
-  the kitty lines and the shell hook it added (each with a backup) and restores the dock.
+  the kitty lines and the shell hook it added (each with a backup) and restores the dock and
+  wallpaper.
   `--purge` also deletes settings and your pet's save.
 - **Remove the plugin:** `omarchy plugin remove 3thand.desktop-pet`.
 
@@ -228,17 +240,50 @@ Built and tested on a GPU-less VM where everything renders on the CPU:
   walking; idle animation is a ~2 fps frame flip; nothing full-screen, no blur or shaders
 - the terminal is read only when the pet is about to eat; window geometry is polled every 2 s only
   while patches are on screen; the fetch ball runs physics at 20 fps only while it flies
+- skill effects use small click-through surfaces; the effects overlay is 1x1 while idle, trail
+  marks fade in ~3 fps steps and physics runs at 15 fps for a second or two; mini clones only
+  move in short hops
 - measured on that VM: the shell process uses about 1% CPU with the pet idle and about 5% while it
   walks (the compositor pays extra while anything moves on a CPU renderer)
 
-## Coming in v0.2.0: pet skills
+## Skills
 
-Your pets will learn tricks, and pitch new ones of their own: slime trails and mitosis, a cat
-that sits beside your cursor and swats letters off btop, a dragon's gold hoard with a victory
-roar, and goblin wallpaper heists and ransom notes. Skills are small JSON recipes built from a
-fixed list of safe actions. Every effect is cute, entertaining and impermanent: it expires on its
-own, `desktop-pet heal` undoes everything, and nothing a pet invents runs without your approval.
-Skill packs will be shareable.
+Each pet knows a few tricks, and can learn more:
+
+| pet | skill | what happens |
+|---|---|---|
+| slime | **trail** | leaves glossy drips along its path that fade after ~10 s |
+| slime | **mitosis** | at max happiness it splits into three mini-slimes for a minute, then they merge back |
+| cat | **cursor-sit** | when neglected it sits beside your mouse pointer and follows it for ~5 s (never blocks clicks) |
+| cat | **knock-off** | swats one letter off btop/kitty; it falls to the bottom of the screen and shatters into pixels. The hole heals like eaten letters |
+| dragon | **hoard** | a tiny, click-through gold-coin pile in a corner that grows with every successful command (build buddy) |
+| dragon | **roar** | every 10 coins: a one-second gentle shake drawn on an overlay (no window ever moves) |
+| goblin | **wallpaper-heist** | swaps your wallpaper for a "goblin was here" pixel doodle for 20 s, then puts the original back |
+| goblin | **ransom** | hides a dock icon and leaves a ransom note: pet the goblin 3 times to get it back (or wait 2 minutes) |
+
+Skills are rate-limited (cooldowns and daily caps), theme-colored and size-aware, and each one can
+be switched off. They are small JSON recipes built from a fixed list of safe actions (walk, hop,
+animate, speech bubbles, particles, trails, overlay effects, mini clones, a journaled dock or
+wallpaper change). Recipes can't run commands, write files or reach the network. Every effect
+expires on its own, `desktop-pet heal` undoes everything at once, and the dock and wallpaper are
+journaled, so `off`, a reload or a crash puts them back too.
+
+```sh
+desktop-pet skills                  # list (built-in, yours, pitched) with on/off
+desktop-pet skills disable ransom   # or enable; `skills off` stops all skill activity
+desktop-pet skills run trail        # run one now
+desktop-pet skills review           # what your pet pitched: preview once, approve, reject
+desktop-pet skills pitch            # ask for a new one now
+```
+
+**Your pet pitches new skills.** With the brain on, about once a day at most, it asks Claude (in
+character, tools disabled) to invent a trick. The recipe is validated and queued, and **never
+enabled automatically**: review it with `desktop-pet skills review` or from the right-click menu
+(a badge shows how many are waiting).
+
+**Write your own and share packs.** Drop recipe files into `~/.config/desktop-pet/skills/`;
+[docs/SKILLS.md](docs/SKILLS.md) documents the format with an example, and
+[docs/skill.schema.json](docs/skill.schema.json) is the schema every recipe is checked against.
 
 ## Porting to other distros (help wanted!)
 

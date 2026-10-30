@@ -2,10 +2,10 @@
   "schemaVersion": 1,
   "id": "3thand.desktop-pet",
   "name": "Desktop Pet",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "author": "3thanD",
   "homepage": "https://github.com/3thanD/desktop-pet",
-  "description": "A tiny pixel-art pet (slime, cat, baby dragon or goblin) that wanders your desktop, nibbles letters out of your kitty terminals, follows your Omarchy theme and can chat through your Claude Code CLI",
+  "description": "A tiny pixel-art pet (slime, cat, baby dragon or goblin) that wanders your desktop, nibbles letters out of your kitty terminals, follows your Omarchy theme and can chat through your Claude Code CLI; it learns skills and pitches new ones for you to approve",
   "kinds": ["service"],
   "entryPoints": { "service": "Pet.qml" }
 }

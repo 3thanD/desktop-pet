@@ -1397,8 +1397,8 @@ HELP = """{title} — a tiny pixel pet for your Omarchy desktop
   Mouse: left-click pets it; right-click (or SUPER+SHIFT+left-click) opens its menu.
 
 {c}
-  on | off | toggle              show / remove the pet (off removes every overlay
-                                 instantly, restores the dock). Key: SUPER+CTRL+P (after setup)
+  on | off | toggle              show / remove the pet (off removes every overlay and skill
+                                 effect, restores the dock and wallpaper). Key: SUPER+CTRL+P
   pick <slime|cat|dragon|goblin> choose your pet (shortcut: desktop-pet cat)
   list                           show all pets with a tiny preview
   name <name>                    name the current pet (shown in its menu)
