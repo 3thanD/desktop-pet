@@ -8,8 +8,18 @@
 omarchy plugin add https://github.com/3thanD/desktop-pet.git --enable
 ```
 
-<p align="center"><img src="docs/evolve.gif" alt="A slime growing up through its evolution stages" width="420"></p>
-<!-- desktop recordings (hero.png, eat/dragon/goblin GIFs + MP4s): run tools/make-media.sh on an unlocked desktop, then add them here -->
+<p align="center"><img src="docs/eat.gif" alt="A slime hopping onto btop and eating letters off the screen" width="720"></p>
+
+<table>
+  <tr>
+    <td align="center"><img src="docs/dragon.gif" alt="The baby dragon breathing fire that turns text red" width="360"><br><sub>The dragon's fire turns text red</sub></td>
+    <td align="center"><img src="docs/goblin.gif" alt="The goblin stealing a dock icon" width="360"><br><sub>The goblin borrows a dock icon</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/evolve.gif" alt="A slime evolving to its next stage" width="360"><br><sub>Evolving over real days of care</sub></td>
+    <td align="center"><img src="docs/themes.gif" alt="A pet recoloring across Omarchy themes" width="360"><br><sub>Follows your Omarchy theme</sub></td>
+  </tr>
+</table>
 
 An egg appears on your desktop and hatches into a slime (or a cat, a baby dragon or a goblin).
 It wanders around, gets hungry, hops over to your terminal and nibbles letters right off the
@@ -220,6 +230,15 @@ Built and tested on a GPU-less VM where everything renders on the CPU:
   while patches are on screen; the fetch ball runs physics at 20 fps only while it flies
 - measured on that VM: the shell process uses about 1% CPU with the pet idle and about 5% while it
   walks (the compositor pays extra while anything moves on a CPU renderer)
+
+## Coming in v0.2.0: pet skills
+
+Your pets will learn tricks, and pitch new ones of their own: slime trails and mitosis, a cat
+that sits beside your cursor and swats letters off btop, a dragon's gold hoard with a victory
+roar, and goblin wallpaper heists and ransom notes. Skills are small JSON recipes built from a
+fixed list of safe actions. Every effect is cute, entertaining and impermanent: it expires on its
+own, `desktop-pet heal` undoes everything, and nothing a pet invents runs without your approval.
+Skill packs will be shareable.
 
 ## Porting to other distros (help wanted!)
 
