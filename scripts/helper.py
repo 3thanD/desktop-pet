@@ -14,6 +14,16 @@ Commands (all print one JSON object on stdout):
   dock-restore          put the original pinned list back and restart the dock.
   talk JSON             log a pet event and/or produce a speech line (Claude via
                         the claude CLI with no tools, or canned fallback).
+  skills-list           every valid skill recipe (built-in, user, pending) + errors.
+  skills-approve ID     move a pending (pitched) skill to the user skills and enable it.
+  skills-reject ID      drop a pending skill.
+  skills-pitch [--auto] JSON   ask Claude, in character, for one new skill (queued,
+                        never enabled). --auto: at most one a day.
+  wall-swap DOODLE W H COLORS SECONDS   journaled temporary wallpaper swap.
+  wall-restore          put the journaled original wallpaper back.
+  restore-all           dock-restore + wall-restore (load, heal, off, crash).
+  cursor-stream SECONDS pointer position as JSON lines, ~8 per second.
+  sound NAME            play a tiny synthesized skill sound (if enabled).
 """
 import json
 import os
@@ -30,8 +40,9 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, os.path.dirname(os.path.realpath(__file__)))
 
 import adapters  # noqa: E402  compositor adapters (Hyprland today)
+import skills  # noqa: E402  skill recipes, pitch queue, wallpaper journal
 import terminals  # noqa: E402  terminal adapters (kitty today)
-from util import run  # noqa: E402
+from util import run, find_claude  # noqa: E402
 
 HOME = os.path.expanduser("~")
 STATE_DIR = os.path.join(HOME, ".local/state/desktop-pet")
@@ -397,15 +408,6 @@ def cmd_dock_restore():
 CONFIG_PATH = os.path.join(HOME, ".config/desktop-pet/config.json")
 MEMORY_PATH = os.path.join(STATE_DIR, "memory.json")
 STATE_PATH = os.path.join(STATE_DIR, "state.json")
-CLAUDE_CANDIDATES = [  # fallbacks when `claude` is not on PATH
-    os.path.join(HOME, ".local/bin/claude"),
-    os.path.join(HOME, ".claude/local/claude"),
-    os.path.join(HOME, ".local/share/mise/shims/claude"),
-    os.path.join(HOME, ".local/share/mise/installs/claude/latest/claude"),
-    os.path.join(HOME, ".npm-global/bin/claude"),
-    os.path.join(HOME, ".local/share/npm/bin/claude"),
-    os.path.join(HOME, ".bun/bin/claude"),
-]
 AUTO_CAP = {"off": 0, "low": 8, "normal": 16, "high": 30}   # automatic Claude calls per hour
 
 PERSONAS = {
@@ -482,16 +484,6 @@ def save_json(path, obj):
     with open(tmp, "w") as f:
         json.dump(obj, f, indent=1)
     os.replace(tmp, path)
-
-
-def find_claude():
-    p = shutil.which("claude")
-    if p:
-        return p
-    for p in CLAUDE_CANDIDATES:
-        if os.path.isfile(p) and os.access(p, os.X_OK):
-            return p
-    return None
 
 
 ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07")
@@ -672,6 +664,49 @@ def cmd_talk(raw):
     out({"text": text, "source": source})
 
 
+# ------------------------------------------------------------------ skills
+
+def cmd_cursor_stream(seconds):
+    comp = compositor()
+    if not comp:
+        return
+    end = time.time() + max(0.5, min(12.0, seconds))
+    last = None
+    while time.time() < end:
+        pos, mon = comp.cursor_pos(), comp.focused_monitor()
+        if pos and mon:
+            cur = (pos[0] - mon["x"], pos[1] - mon["y"], mon["name"])
+            if cur != last:
+                out({"x": cur[0], "y": cur[1], "monitor": cur[2]})
+                sys.stdout.flush()
+                last = cur
+        time.sleep(0.12)
+
+
+def cmd_skills_pitch(args):
+    auto = "--auto" in args
+    rest = [a for a in args if a != "--auto"]
+    try:
+        ctx = json.loads(rest[0]) if rest else {}
+    except Exception:
+        ctx = {}
+    cfg = load_json(CONFIG_PATH, {})
+    pet = ctx.get("pet") or cfg.get("pet") or "slime"
+    ctx["pet"] = pet
+    if not ctx.get("name"):
+        ctx["name"] = (cfg.get("names") or {}).get(pet, "")
+    personas = cfg.get("persona") if isinstance(cfg.get("persona"), dict) else {}
+    persona = personas.get(pet) or PERSONAS.get(pet, PERSONAS["slime"])
+    out(skills.pitch(ctx, persona, auto=auto))
+
+
+def cmd_restore_all():
+    with dock_lock():
+        d, _ = restore_locked()
+    w = skills.wall_restore()
+    out({"ok": True, "dock": d, "wallpaper": w})
+
+
 def main(argv):
     if not argv:
         print(__doc__)
@@ -694,6 +729,27 @@ def main(argv):
         cmd_dock_restore()
     elif cmd == "talk":
         cmd_talk(argv[1] if len(argv) > 1 else sys.stdin.read())
+    elif cmd == "skills-list":
+        out(skills.list_for_qml())
+    elif cmd in ("skills-approve", "skills-reject") and len(argv) > 1:
+        ok, msg = (skills.approve if cmd == "skills-approve" else skills.reject)(argv[1])
+        out({"ok": ok, "id": msg if ok else argv[1], "message": "" if ok else msg})
+    elif cmd == "skills-pitch":
+        cmd_skills_pitch(argv[1:])
+    elif cmd == "wall-swap" and len(argv) > 5:
+        try:
+            colors = json.loads(argv[4])
+        except Exception:
+            colors = {}
+        out(skills.wall_swap(argv[1], int(float(argv[2])), int(float(argv[3])), colors if isinstance(colors, dict) else {}, float(argv[5])))
+    elif cmd == "wall-restore":
+        out({"ok": True, "restored": skills.wall_restore()})
+    elif cmd == "restore-all":
+        cmd_restore_all()
+    elif cmd == "cursor-stream":
+        cmd_cursor_stream(float(argv[1]) if len(argv) > 1 else 5)
+    elif cmd == "sound" and len(argv) > 1:
+        out(skills.play_sound(argv[1]))
     else:
         print(__doc__)
         return 2

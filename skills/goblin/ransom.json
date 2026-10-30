@@ -1,0 +1,16 @@
+{
+ "format": "desktop-pet-skill/1",
+ "id": "ransom",
+ "name": "Ransom",
+ "pet": "goblin",
+ "description": "Hides a dock icon and leaves a ransom note. Pet the goblin 3 times to get it back (it returns by itself after 2 minutes).",
+ "trigger": { "on": "idle", "chance": 0.015 },
+ "cooldown": 240,
+ "maxPerDay": 2,
+ "steps": [
+  { "action": "move", "to": "bottom" },
+  { "action": "animate", "frames": "wiggle", "duration": 1 },
+  { "action": "dock", "mode": "hide", "duration": 120, "ransom": { "task": "pet", "count": 3, "text": "Pet {name} 3 times or the {icon} icon gets it!" } },
+  { "action": "bubble", "text": "Heh heh. Read the note!" }
+ ]
+}

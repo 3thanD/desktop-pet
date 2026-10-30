@@ -1,0 +1,13 @@
+{
+ "format": "desktop-pet-skill/1",
+ "id": "trail",
+ "name": "Slime trail",
+ "pet": "slime",
+ "description": "Leaves glossy drips along its path that fade after about 10 seconds.",
+ "trigger": { "on": "walk", "chance": 0.6 },
+ "cooldown": 2,
+ "maxPerDay": 80,
+ "steps": [
+  { "action": "trail", "kind": "drips", "duration": 14, "fade": 10, "color": "body" }
+ ]
+}

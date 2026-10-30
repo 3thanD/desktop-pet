@@ -1,0 +1,13 @@
+{
+ "format": "desktop-pet-skill/1",
+ "id": "hoard",
+ "name": "Hoard",
+ "pet": "dragon",
+ "description": "A tiny gold-coin pile in a screen corner that grows with every successful command. Click-through and size-capped.",
+ "trigger": { "on": "command-ok", "chance": 1 },
+ "cooldown": 1,
+ "steps": [
+  { "action": "hoard", "add": 1 },
+  { "action": "particles", "kind": "coins", "count": 3, "color": "yellow" }
+ ]
+}

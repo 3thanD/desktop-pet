@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/3thanD/desktop-pet/docs/skill.schema.json",
+  "title": "desktop-pet skill recipe",
+  "description": "A pet skill: a trigger plus a short list of steps built ONLY from the approved actions below. Unknown fields and unknown actions are rejected. Every duration is capped and every effect reverts on its own. See docs/SKILLS.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "id", "name", "pet", "trigger", "cooldown", "steps"],
+  "properties": {
+    "format": { "const": "desktop-pet-skill/1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]{1,31}$", "description": "unique id, lowercase letters, digits and dashes" },
+    "name": { "$ref": "#/$defs/text", "maxLength": 40 },
+    "pet": { "enum": ["slime", "cat", "dragon", "goblin", "any"] },
+    "description": { "$ref": "#/$defs/text", "maxLength": 200 },
+    "author": { "$ref": "#/$defs/text", "maxLength": 40 },
+    "trigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["on"],
+      "properties": {
+        "on": { "enum": ["idle", "walk", "happy", "neglected", "petted", "command-ok", "milestone", "manual"],
+                "description": "idle: now and then while idle; walk: when it starts a stroll; happy: happiness >= min; neglected: not petted for min minutes; petted: when clicked; command-ok: a successful terminal command (build buddy); milestone: every min hoard coins; manual: only from the CLI / menu" },
+        "chance": { "type": "number", "minimum": 0, "maximum": 1, "description": "probability per minute (idle, happy, neglected) or per event (walk, petted, command-ok)" },
+        "min": { "type": "number", "minimum": 0, "maximum": 1440 }
+      }
+    },
+    "cooldown": { "type": "number", "minimum": 1, "maximum": 1440, "description": "minutes between two runs" },
+    "maxPerDay": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "steps": { "type": "array", "minItems": 1, "maxItems": 24, "items": { "$ref": "#/$defs/step" } }
+  },
+  "$defs": {
+    "text": { "type": "string", "minLength": 1, "maxLength": 200 },
+    "color": { "type": "string", "pattern": "^(accent|body|foreground|red|yellow|orange|green|cyan|blue|magenta|#[0-9a-fA-F]{6})$",
+               "description": "a theme color role (follows the theme and complement mode) or #rrggbb" },
+    "image": { "type": "string", "pattern": "^[A-Za-z0-9_-]{1,40}(\\.png)?$",
+               "description": "a built-in doodle name, or NAME.png in ~/.config/desktop-pet/skills/ (no paths, PNG, max 256 KB, max 1024x1024)" },
+    "step": {
+      "oneOf": [
+        { "$ref": "#/$defs/move" }, { "$ref": "#/$defs/hop" }, { "$ref": "#/$defs/path" },
+        { "$ref": "#/$defs/animate" }, { "$ref": "#/$defs/bubble" }, { "$ref": "#/$defs/wait" },
+        { "$ref": "#/$defs/particles" }, { "$ref": "#/$defs/trail" }, { "$ref": "#/$defs/tint" },
+        { "$ref": "#/$defs/shake" }, { "$ref": "#/$defs/glyph" }, { "$ref": "#/$defs/doodle" },
+        { "$ref": "#/$defs/sound" }, { "$ref": "#/$defs/dock" }, { "$ref": "#/$defs/wallpaper" },
+        { "$ref": "#/$defs/clones" }, { "$ref": "#/$defs/hoard" }
+      ]
+    },
+    "move": {
+      "description": "walk somewhere; to=cursor with follow>0 keeps beside the pointer (never blocks clicks)",
+      "type": "object", "additionalProperties": false, "required": ["action", "to"],
+      "properties": {
+        "action": { "const": "move" },
+        "to": { "enum": ["random", "cursor", "center", "home", "bottom", "top", "left", "right"] },
+        "follow": { "type": "number", "minimum": 0, "maximum": 10 },
+        "speed": { "enum": ["slow", "normal", "fast"] }
+      }
+    },
+    "hop": {
+      "description": "hop in place",
+      "type": "object", "additionalProperties": false, "required": ["action", "count"],
+      "properties": {
+        "action": { "const": "hop" },
+        "count": { "type": "integer", "minimum": 1, "maximum": 8 },
+        "height": { "type": "integer", "minimum": 2, "maximum": 30 }
+      }
+    },
+    "path": {
+      "description": "walk a little shape around where it stands",
+      "type": "object", "additionalProperties": false, "required": ["action", "shape"],
+      "properties": {
+        "action": { "const": "path" },
+        "shape": { "enum": ["circle", "zigzag", "figure8", "square", "heart"] },
+        "size": { "enum": ["small", "medium", "large"] },
+        "laps": { "type": "integer", "minimum": 1, "maximum": 3 }
+      }
+    },
+    "animate": {
+      "description": "play a frame set",
+      "type": "object", "additionalProperties": false, "required": ["action", "frames"],
+      "properties": {
+        "action": { "const": "animate" },
+        "frames": { "enum": ["bounce", "spin", "wiggle", "squash", "blink", "chomp", "sleepy", "swat"] },
+        "duration": { "type": "number", "minimum": 0.2, "maximum": 10 }
+      }
+    },
+    "bubble": {
+      "description": "a speech bubble (plain text; {name} is the pet's name)",
+      "type": "object", "additionalProperties": false, "required": ["action", "text"],
+      "properties": { "action": { "const": "bubble" }, "text": { "$ref": "#/$defs/text", "maxLength": 100 } }
+    },
+    "wait": {
+      "type": "object", "additionalProperties": false, "required": ["action", "duration"],
+      "properties": { "action": { "const": "wait" }, "duration": { "type": "number", "minimum": 0.1, "maximum": 30 } }
+    },
+    "particles": {
+      "description": "a small burst around the pet",
+      "type": "object", "additionalProperties": false, "required": ["action", "kind"],
+      "properties": {
+        "action": { "const": "particles" },
+        "kind": { "enum": ["hearts", "sparkles", "coins", "pixels", "bubbles", "stars", "notes", "smoke"] },
+        "count": { "type": "integer", "minimum": 1, "maximum": 24 },
+        "color": { "$ref": "#/$defs/color" }
+      }
+    },
+    "trail": {
+      "description": "leave a trail behind while walking for `duration` s; each mark fades after `fade` s",
+      "type": "object", "additionalProperties": false, "required": ["action", "kind"],
+      "properties": {
+        "action": { "const": "trail" },
+        "kind": { "enum": ["drips", "sparkles", "footprints", "hearts"] },
+        "duration": { "type": "number", "minimum": 1, "maximum": 120 },
+        "fade": { "type": "number", "minimum": 2, "maximum": 20 },
+        "color": { "$ref": "#/$defs/color" }
+      }
+    },
+    "tint": {
+      "description": "a soft color wash around the pet or over the screen (never blocks input)",
+      "type": "object", "additionalProperties": false, "required": ["action", "color"],
+      "properties": {
+        "action": { "const": "tint" },
+        "color": { "$ref": "#/$defs/color" },
+        "opacity": { "type": "number", "minimum": 0.02, "maximum": 0.25 },
+        "duration": { "type": "number", "minimum": 0.5, "maximum": 10 },
+        "area": { "enum": ["pet", "screen"] }
+      }
+    },
+    "shake": {
+      "description": "a screen-shake drawn as an overlay (real windows never move)",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": {
+        "action": { "const": "shake" },
+        "intensity": { "enum": ["gentle", "medium"] },
+        "duration": { "type": "number", "minimum": 0.2, "maximum": 3 }
+      }
+    },
+    "glyph": {
+      "description": "a letter falls with physics and shatters; source=terminal swats one from btop/kitty (the hole heals like eaten letters)",
+      "type": "object", "additionalProperties": false, "required": ["action", "source"],
+      "properties": {
+        "action": { "const": "glyph" },
+        "source": { "enum": ["terminal", "text"] },
+        "text": { "type": "string", "pattern": "^[A-Za-z0-9!?*+=#@%.,:-]{1,3}$" },
+        "shatter": { "type": "boolean" }
+      }
+    },
+    "doodle": {
+      "description": "show a small pixel doodle on the desktop for a while",
+      "type": "object", "additionalProperties": false, "required": ["action", "image"],
+      "properties": {
+        "action": { "const": "doodle" },
+        "image": { "$ref": "#/$defs/image" },
+        "where": { "enum": ["pet", "corner", "center"] },
+        "duration": { "type": "number", "minimum": 1, "maximum": 60 }
+      }
+    },
+    "sound": {
+      "description": "a tiny synthesized sound (only if sounds are enabled; off by default)",
+      "type": "object", "additionalProperties": false, "required": ["action", "name"],
+      "properties": { "action": { "const": "sound" }, "name": { "enum": ["blip", "chime", "coin", "roar", "pop", "purr"] } }
+    },
+    "dock": {
+      "description": "hide or move one pinned dock icon (journaled; comes back after `duration` s, on heal/off, or when the ransom is paid)",
+      "type": "object", "additionalProperties": false, "required": ["action", "mode"],
+      "properties": {
+        "action": { "const": "dock" },
+        "mode": { "enum": ["hide", "move"] },
+        "duration": { "type": "number", "minimum": 5, "maximum": 120 },
+        "ransom": {
+          "type": "object", "additionalProperties": false, "required": ["task", "count"],
+          "properties": {
+            "task": { "enum": ["pet"] },
+            "count": { "type": "integer", "minimum": 1, "maximum": 10 },
+            "text": { "$ref": "#/$defs/text", "maxLength": 80 }
+          }
+        }
+      }
+    },
+    "wallpaper": {
+      "description": "swap the wallpaper for a pixel doodle, then put the original back (journaled)",
+      "type": "object", "additionalProperties": false, "required": ["action", "doodle"],
+      "properties": {
+        "action": { "const": "wallpaper" },
+        "doodle": { "$ref": "#/$defs/image" },
+        "duration": { "type": "number", "minimum": 5, "maximum": 120 }
+      }
+    },
+    "clones": {
+      "description": "split into up to 3 mini copies that wander, then merge back",
+      "type": "object", "additionalProperties": false, "required": ["action", "count"],
+      "properties": {
+        "action": { "const": "clones" },
+        "count": { "type": "integer", "minimum": 1, "maximum": 3 },
+        "duration": { "type": "number", "minimum": 3, "maximum": 120 }
+      }
+    },
+    "hoard": {
+      "description": "add coins to the pet's tiny persistent coin pile (click-through, size-capped)",
+      "type": "object", "additionalProperties": false, "required": ["action"],
+      "properties": { "action": { "const": "hoard" }, "add": { "type": "integer", "minimum": 1, "maximum": 5 } }
+    }
+  }
+}

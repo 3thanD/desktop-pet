@@ -1,0 +1,17 @@
+{
+ "format": "desktop-pet-skill/1",
+ "id": "wallpaper-heist",
+ "name": "Wallpaper heist",
+ "pet": "goblin",
+ "description": "Swaps your wallpaper for a 'goblin was here' pixel doodle for 20 seconds, then puts the original back.",
+ "trigger": { "on": "idle", "chance": 0.01 },
+ "cooldown": 360,
+ "maxPerDay": 2,
+ "steps": [
+  { "action": "move", "to": "center" },
+  { "action": "animate", "frames": "wiggle", "duration": 1.5 },
+  { "action": "wallpaper", "doodle": "goblin-was-here", "duration": 20 },
+  { "action": "particles", "kind": "sparkles", "count": 10, "color": "yellow" },
+  { "action": "bubble", "text": "Heh heh. I redecorated! Don't worry, it washes off." }
+ ]
+}

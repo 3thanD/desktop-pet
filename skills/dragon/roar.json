@@ -1,0 +1,16 @@
+{
+ "format": "desktop-pet-skill/1",
+ "id": "roar",
+ "name": "Victory roar",
+ "pet": "dragon",
+ "description": "Every 10 coins in the hoard it roars: a one-second gentle shake drawn on an overlay (no window ever moves).",
+ "trigger": { "on": "milestone", "min": 10, "chance": 1 },
+ "cooldown": 1,
+ "steps": [
+  { "action": "animate", "frames": "bounce", "duration": 0.5 },
+  { "action": "sound", "name": "roar" },
+  { "action": "shake", "intensity": "gentle", "duration": 1 },
+  { "action": "particles", "kind": "smoke", "count": 8, "color": "orange" },
+  { "action": "bubble", "text": "RAWR! Behold my glorious hoard!" }
+ ]
+}

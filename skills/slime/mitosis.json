@@ -1,0 +1,18 @@
+{
+ "format": "desktop-pet-skill/1",
+ "id": "mitosis",
+ "name": "Mitosis",
+ "pet": "slime",
+ "description": "At max happiness it splits into three mini-slimes for a minute, then they merge back.",
+ "trigger": { "on": "happy", "min": 98, "chance": 0.08 },
+ "cooldown": 180,
+ "maxPerDay": 3,
+ "steps": [
+  { "action": "bubble", "text": "I'm so happy I could... SPLIT!" },
+  { "action": "animate", "frames": "wiggle", "duration": 1.2 },
+  { "action": "particles", "kind": "bubbles", "count": 10, "color": "body" },
+  { "action": "clones", "count": 3, "duration": 60 },
+  { "action": "particles", "kind": "sparkles", "count": 12, "color": "accent" },
+  { "action": "bubble", "text": "*blorp* All of me is back together!" }
+ ]
+}

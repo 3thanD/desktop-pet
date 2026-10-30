@@ -1,0 +1,15 @@
+{
+ "format": "desktop-pet-skill/1",
+ "id": "knock-off",
+ "name": "Knock-off",
+ "pet": "cat",
+ "description": "Swats one letter off btop or a kitty window. It falls to the bottom of the screen and shatters. The hole heals like eaten letters.",
+ "trigger": { "on": "idle", "chance": 0.04 },
+ "cooldown": 30,
+ "maxPerDay": 10,
+ "steps": [
+  { "action": "glyph", "source": "terminal", "shatter": true },
+  { "action": "bubble", "text": "Oops. It fell." },
+  { "action": "animate", "frames": "blink", "duration": 0.6 }
+ ]
+}

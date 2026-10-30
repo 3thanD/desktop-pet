@@ -1,0 +1,16 @@
+{
+ "format": "desktop-pet-skill/1",
+ "id": "cursor-sit",
+ "name": "Cursor sit",
+ "pet": "cat",
+ "description": "When neglected it sits beside your mouse pointer and follows it for a few seconds (it never blocks clicks).",
+ "trigger": { "on": "neglected", "min": 45, "chance": 0.25 },
+ "cooldown": 60,
+ "maxPerDay": 6,
+ "steps": [
+  { "action": "bubble", "text": "Ahem. I am RIGHT here." },
+  { "action": "move", "to": "cursor", "follow": 5, "speed": "fast" },
+  { "action": "animate", "frames": "blink", "duration": 0.8 },
+  { "action": "bubble", "text": "...whatever. Carry on." }
+ ]
+}
